@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SIH Surveillance Dashboard</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>AI Surveillance Dashboard</h1>
+    <span id="status">connecting...</span>
+  </header>
+  <main>
+    <section id="map-panel">
+      <div id="map"></div>
+    </section>
+    <section id="side-panel">
+      <div id="camera-view">
+        <h2 id="camera-view-title">Select a camera</h2>
+        <img id="camera-feed" alt="camera feed" />
+      </div>
+      <div id="alerts">
+        <h2>Live Alerts</h2>
+        <ul id="alert-list"></ul>
+      </div>
+      <div id="history">
+        <h2>Event History</h2>
+        <table id="event-table">
+          <thead><tr><th>Time</th><th>Camera</th><th>Object</th><th>Score</th><th>Evidence</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
