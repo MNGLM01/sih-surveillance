@@ -6,10 +6,10 @@ CAMERAS = [
     {
         "id": "cam1",
         "name": "Main Gate",
-        "source": os.path.join(os.path.dirname(__file__), "..", "sample_videos", "people-walking.mp4"),
+        "source": os.path.join(os.path.dirname(__file__), "..", "sample_videos", "WhatsApp Video 2026-09-14 at 10.48.17 PM.mp4"),
         "lat": 28.6139,
         "lon": 77.2090,
-        "zone": (250, 150, 550, 400),  # (x1, y1, x2, y2) restricted-zone rectangle
+        "zone": (276, 165, 607, 442),  # (x1, y1, x2, y2) restricted-zone rectangle scaled for 848x478
     },
 ]
 

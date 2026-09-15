@@ -41,7 +41,11 @@ async def broadcast(message: dict):
 
 
 def on_frame(camera_id, annotated_frame):
-    cv2.imwrite(str(LIVE_DIR / f"{camera_id}.jpg"), annotated_frame)
+    cv2.imwrite(
+        str(LIVE_DIR / f"{camera_id}.jpg"),
+        annotated_frame,
+        [cv2.IMWRITE_JPEG_QUALITY, 80],
+    )
 
 
 def on_event(camera_id, track_id, cls_name, score, breakdown, save_evidence):

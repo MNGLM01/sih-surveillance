@@ -20,10 +20,30 @@ function bandFor(score) {
 function selectCamera(camId) {
   activeCamera = camId;
   cameraTitle.textContent = `Camera: ${camId}`;
-  if (feedTimer) clearInterval(feedTimer);
-  const refresh = () => { cameraFeed.src = `live/${camId}.jpg?t=${Date.now()}`; };
+  if (feedTimer) clearTimeout(feedTimer);
+
+  let isFetching = false;
+  const refresh = () => {
+    if (activeCamera !== camId) return;
+    if (isFetching) return;
+    isFetching = true;
+
+    const img = new Image();
+    img.onload = () => {
+      if (activeCamera === camId) {
+        cameraFeed.src = img.src;
+      }
+      isFetching = false;
+      feedTimer = setTimeout(refresh, 66); // ~15 FPS smooth playback without request backlog
+    };
+    img.onerror = () => {
+      isFetching = false;
+      feedTimer = setTimeout(refresh, 150);
+    };
+    img.src = `live/${camId}.jpg?t=${Date.now()}`;
+  };
+
   refresh();
-  feedTimer = setInterval(refresh, 400);
 }
 
 async function loadCameras() {

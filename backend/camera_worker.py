@@ -20,6 +20,12 @@ DETECT_CLASSES = [0, 2, 3, 5, 7]
 VEHICLE_CLASSES = {2, 3, 5, 7}
 EVIDENCE_BUFFER_SECONDS = 6
 
+try:
+    import torch
+    DEFAULT_DEVICE = 0 if torch.cuda.is_available() else "cpu"
+except Exception:
+    DEFAULT_DEVICE = "cpu"
+
 
 class CameraWorker:
     """Owns one video source, one YOLO model instance (own tracker state), one risk history."""
@@ -33,6 +39,9 @@ class CameraWorker:
         self._stop = False
         self._frame_buffer = deque(maxlen=1)  # sized once fps is known
         self.fps = 25
+        self.device = self.cfg.get("device", DEFAULT_DEVICE)
+        self.imgsz = self.cfg.get("imgsz", 480)
+        self.tracker = self.cfg.get("tracker", "bytetrack.yaml")
 
     def stop(self):
         self._stop = True
@@ -49,6 +58,7 @@ class CameraWorker:
         zone = self.cfg["zone"]
         is_file = isinstance(self.cfg["source"], str) and os.path.isfile(self.cfg["source"])
         while not self._stop:
+            t_frame_start = time.time()
             ok, frame = cap.read()
             if not ok:
                 if is_file:  # loop sample-video demos instead of stopping after one pass
@@ -61,7 +71,13 @@ class CameraWorker:
             frame_idx += 1
 
             results = self.model.track(
-                frame, persist=True, classes=DETECT_CLASSES, verbose=False
+                frame,
+                persist=True,
+                classes=DETECT_CLASSES,
+                tracker=self.tracker,
+                imgsz=self.imgsz,
+                device=self.device,
+                verbose=False,
             )[0]
             annotated = results.plot()
             self._frame_buffer.append(annotated)
@@ -87,6 +103,11 @@ class CameraWorker:
 
             if self.on_frame:
                 self.on_frame(self.cfg["id"], annotated)
+
+            if is_file:
+                delay = (1.0 / fps) - (time.time() - t_frame_start)
+                if delay > 0:
+                    time.sleep(delay)
 
         cap.release()
 
