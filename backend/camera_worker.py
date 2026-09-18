@@ -26,6 +26,12 @@ STATUS_OFFLINE = "OFFLINE"
 STATUS_ERROR = "ERROR"
 STATUS_STOPPED = "STOPPED"
 
+try:
+    import torch
+    DEFAULT_DEVICE = 0 if torch.cuda.is_available() else "cpu"
+except Exception:
+    DEFAULT_DEVICE = "cpu"
+
 
 class CameraWorker:
     """Owns one camera's ingestion loop. A failure here (bad source, a
@@ -41,9 +47,25 @@ class CameraWorker:
         self.on_incident_evidence = on_incident_evidence  # (incident_id, path)
         self._stop = False
         self.fps = 25
+        self.device = self.cfg.get("device", DEFAULT_DEVICE)
+        self.imgsz = self.cfg.get("imgsz", 480)
+        self.conf = self.cfg.get("conf", 0.25)
+        self.iou = self.cfg.get("iou", 0.45)
+        default_tracker = os.path.join(os.path.dirname(__file__), "bytetrack.yaml")
+        self.tracker = self.cfg.get("tracker", default_tracker)
+
 
     def stop(self):
         self._stop = True
+
+    def reset_tracker(self):
+        """Resets ByteTrack state (clears active tracks, Kalman filters, and ID counters)."""
+        if hasattr(self.model, "predictor") and self.model.predictor is not None:
+            trackers = getattr(self.model.predictor, "trackers", None)
+            if trackers:
+                for trk in trackers:
+                    if hasattr(trk, "reset"):
+                        trk.reset()
 
     def run(self):
         self._stop = False

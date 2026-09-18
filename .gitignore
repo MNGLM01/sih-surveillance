@@ -5,3 +5,4 @@ data/surveillance.db
 evidence_clips/*.mp4
 frontend/live/*.jpg
 *.pt
+*.code-workspace

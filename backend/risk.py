@@ -95,6 +95,20 @@ class RiskEngine:
         score = min(sum(r.points for r in reasons), 100)
         return RiskResult(score=score, severity=_severity(score), reasons=reasons)
 
+    def cleanup_stale(self, now=None, max_idle_seconds=300):
+        """Evicts tracks not seen within max_idle_seconds to prevent memory creep."""
+        if now is None:
+            now = time.time()
+        stale_ids = [
+            tid for tid, data in self._tracks.items()
+            if (now - data.get("last_seen", now)) > max_idle_seconds
+        ]
+        for tid in stale_ids:
+            self._tracks.pop(tid, None)
+            self._last_band.pop(tid, None)
+        return len(stale_ids)
+
+
 
 def demo():
     """Self-check: the pitch's headline example must keep summing correctly,
