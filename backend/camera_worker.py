@@ -1,24 +1,30 @@
-"""Per-camera pipeline: capture -> detect+track -> event/risk -> push.
+"""Per-camera ingestion: owns one cv2.VideoCapture, feeds frames through the
+SurveillancePipeline, and turns results into callbacks. This is intentionally
+thin - detection/tracking/behavior/risk/incident logic all lives in their own
+modules; this file only knows how to read frames and not crash the process
+when a camera misbehaves.
 
 Run standalone for validation: python backend/camera_worker.py
 """
+import logging
 import os
 import sys
 import time
-from collections import deque
 from pathlib import Path
 
 import cv2
-from ultralytics import YOLO
 
 sys.path.insert(0, str(Path(__file__).parent))
-from config import CAMERAS, FORCE_AFTER_HOURS
-import risk
+import config
+from evidence import EvidenceBuffer
 
-# COCO class ids: 0=person, 2=car, 3=motorcycle, 5=bus, 7=truck
-DETECT_CLASSES = [0, 2, 3, 5, 7]
-VEHICLE_CLASSES = {2, 3, 5, 7}
-EVIDENCE_BUFFER_SECONDS = 6
+logger = logging.getLogger("camera_worker")
+
+STATUS_STARTING = "STARTING"
+STATUS_ONLINE = "ONLINE"
+STATUS_OFFLINE = "OFFLINE"
+STATUS_ERROR = "ERROR"
+STATUS_STOPPED = "STOPPED"
 
 try:
     import torch
@@ -28,16 +34,18 @@ except Exception:
 
 
 class CameraWorker:
-    """Owns one video source, one YOLO model instance (own tracker state), one risk history."""
+    """Owns one camera's ingestion loop. A failure here (bad source, a
+    transient decode error) is retried with backoff and never propagates to
+    other cameras' threads - each CameraWorker.run() is its own thread."""
 
-    def __init__(self, camera_cfg, on_frame=None, on_event=None):
-        self.cfg = camera_cfg
-        self.model = YOLO("yolo11n.pt")
-        self.history = risk.TrackHistory()
-        self.on_frame = on_frame  # callback(camera_id, annotated_frame)
-        self.on_event = on_event  # callback(camera_id, track_id, cls_name, score, breakdown, save_evidence)
+    def __init__(self, context, pipeline, on_frame=None, on_event=None, on_incident=None, on_incident_evidence=None):
+        self.context = context
+        self.pipeline = pipeline
+        self.on_frame = on_frame  # (camera_id, annotated_frame)
+        self.on_event = on_event  # (camera_id, track_id, cls_name, score, breakdown) -> (path, on_saved) | None
+        self.on_incident = on_incident  # (incident, is_new) -> incident_id
+        self.on_incident_evidence = on_incident_evidence  # (incident_id, path)
         self._stop = False
-        self._frame_buffer = deque(maxlen=1)  # sized once fps is known
         self.fps = 25
         self.device = self.cfg.get("device", DEFAULT_DEVICE)
         self.imgsz = self.cfg.get("imgsz", 480)
@@ -60,120 +68,129 @@ class CameraWorker:
                         trk.reset()
 
     def run(self):
-        is_file = isinstance(self.cfg["source"], str) and os.path.isfile(self.cfg["source"])
-        zone = self.cfg["zone"]
+        self._stop = False
+        attempt = 0
+        while not self._stop and attempt <= config.CAMERA_MAX_RETRIES:
+            attempt += 1
+            self.context.status = STATUS_STARTING
+            try:
+                self._run_once()
+                self.context.status = STATUS_STOPPED if self._stop else STATUS_OFFLINE
+                return
+            except Exception as exc:  # noqa: BLE001 - a camera failure must not kill the process
+                self.context.status = STATUS_ERROR
+                self.context.error = str(exc)
+                logger.error("[%s] camera error (attempt %d/%d): %s", self.context.camera_id, attempt, config.CAMERA_MAX_RETRIES, exc)
+                if self._stop or attempt > config.CAMERA_MAX_RETRIES:
+                    break
+                time.sleep(config.CAMERA_RETRY_DELAY_SECONDS)
+        self.context.status = STATUS_OFFLINE
+        logger.error("[%s] giving up after %d attempt(s)", self.context.camera_id, attempt)
 
-        while not self._stop:
-            cap = cv2.VideoCapture(self.cfg["source"])
-            if not cap.isOpened():
-                if is_file:
-                    raise RuntimeError(f"Cannot open source file: {self.cfg['source']}")
-                # For RTSP / webcam live feeds, retry with backoff instead of crashing
-                print(f"[{self.cfg['id']}] Cannot open stream: {self.cfg['source']}. Retrying in 3s...")
-                time.sleep(3)
-                continue
-
+    def _run_once(self):
+        cap = cv2.VideoCapture(self.context.source)
+        if not cap.isOpened():
+            raise RuntimeError(f"cannot open source: {self.context.source}")
+        try:
             self.fps = cap.get(cv2.CAP_PROP_FPS) or 25
-            fps = self.fps
-            self._frame_buffer = deque(maxlen=int(fps * EVIDENCE_BUFFER_SECONDS))
-            frame_idx = 0
-            last_cleanup_time = 0
+            self.context.evidence = EvidenceBuffer(fps=self.fps)
+            self.context.status = STATUS_ONLINE
+            self.context.error = None
+            logger.info("[%s] started (fps=%.1f)", self.context.camera_id, self.fps)
 
+            frame_idx = 0
+            is_file = isinstance(self.context.source, str) and os.path.isfile(self.context.source)
             while not self._stop:
-                t_frame_start = time.time()
                 ok, frame = cap.read()
                 if not ok:
                     if is_file:  # loop sample-video demos instead of stopping after one pass
                         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                         frame_idx = 0
-                        self.history = risk.TrackHistory()  # fresh loiter/zone state each loop
-                        self.reset_tracker()  # fresh ByteTrack Kalman state on loop
+                        self.context.tracker.reset()
                         continue
-                    # Live RTSP / webcam disconnected or stream ended
-                    print(f"[{self.cfg['id']}] Stream disconnected. Reconnecting...")
-                    break
-
-                video_time = frame_idx / fps
+                    return  # webcam/RTSP: a real end of stream, not something to loop
+                video_time = frame_idx / self.fps
                 frame_idx += 1
-
-                # Periodic cleanup of stale tracks (every 30 seconds of footage) to prevent memory creep
-                if video_time - last_cleanup_time > 30:
-                    self.history.cleanup_stale(now=video_time, max_idle_seconds=120)
-                    last_cleanup_time = video_time
-
-                results = self.model.track(
-                    frame,
-                    persist=True,
-                    classes=DETECT_CLASSES,
-                    tracker=self.tracker,
-                    conf=self.conf,
-                    iou=self.iou,
-                    imgsz=self.imgsz,
-                    device=self.device,
-                    verbose=False,
-                )[0]
-
-                annotated = results.plot()
-                self._frame_buffer.append(annotated)
-
-                boxes = results.boxes
-                if boxes is not None and boxes.id is not None:
-                    # Safely handle tracked detections
-                    boxes_xyxy = boxes.xyxy.tolist() if hasattr(boxes.xyxy, "tolist") else []
-                    track_ids = boxes.id.tolist() if hasattr(boxes.id, "tolist") else []
-                    cls_ids = boxes.cls.tolist() if hasattr(boxes.cls, "tolist") else []
-
-                    for box, track_id, cls_id in zip(boxes_xyxy, track_ids, cls_ids):
-                        if track_id is None:
-                            continue
-                        track_id = int(track_id)
-                        cls_name = "vehicle" if int(cls_id) in VEHICLE_CLASSES else "person"
-                        cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
-
-                        self.history.update(track_id, cls_name, (cx, cy), now=video_time)
-                        signals = self.history.signals(track_id, zone, FORCE_AFTER_HOURS)
-                        score, breakdown = risk.compute_risk(signals)
-
-                        if self.on_event and self.history.score_crossed_high(track_id, score):
-                            self.on_event(
-                                self.cfg["id"], track_id, cls_name, score, breakdown,
-                                self.save_evidence_clip,
-                            )
-
-                if self.on_frame:
-                    self.on_frame(self.cfg["id"], annotated)
-
-                if is_file:
-                    delay = (1.0 / fps) - (time.time() - t_frame_start)
-                    if delay > 0:
-                        time.sleep(delay)
-
+                self._process(frame, video_time)
+        finally:
             cap.release()
-            if is_file or self._stop:
-                break
 
+    def _process(self, frame, video_time):
+        result = self.pipeline.process_frame(self.context, frame, video_time)
+        annotated = self._annotate(frame, result)
+        self.context.evidence.append(annotated)
 
-    def save_evidence_clip(self, path):
-        """Writes the buffered recent frames (annotated) to an mp4. Called from on_event."""
-        frames = list(self._frame_buffer)
-        if not frames:
-            return False
-        h, w = frames[0].shape[:2]
-        writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), self.fps, (w, h))
-        for f in frames:
-            writer.write(f)
-        writer.release()
-        return True
+        if self.on_frame:
+            self.on_frame(self.context.camera_id, annotated)
+
+        for tr in result.track_results:
+            if tr.incident is None:
+                continue
+            if tr.incident_is_new:
+                self._handle_new_incident(tr)
+            elif self.on_incident:
+                self.on_incident(tr.incident, False)
+
+    def _handle_new_incident(self, tr):
+        on_saved_callbacks = []
+        evidence_path = None
+
+        if self.on_event:
+            requested = self.on_event(
+                self.context.camera_id, tr.track.track_id, tr.track.class_name,
+                tr.risk.score, tr.incident.reasons,
+            )
+            if requested:
+                evidence_path, on_saved_event = requested
+                on_saved_callbacks.append(on_saved_event)
+
+        if self.on_incident:
+            incident_id = self.on_incident(tr.incident, True)
+            if incident_id is not None:
+                self.context.incident_manager.set_persisted_id(tr.track.track_id, incident_id)
+                if self.on_incident_evidence:
+                    on_saved_callbacks.append(lambda path, iid=incident_id: self.on_incident_evidence(iid, path))
+
+        if evidence_path and on_saved_callbacks:
+            def on_saved(path, callbacks=tuple(on_saved_callbacks)):
+                self.context.incident_manager.set_evidence_path(tr.track.track_id, str(path))
+                for cb in callbacks:
+                    cb(path)
+            self.context.evidence.trigger(evidence_path, on_saved=on_saved)
+
+    @staticmethod
+    def _annotate(frame, result):
+        """Draws boxes/ids for the live feed and evidence clips. Kept here
+        (not in detector/tracker) since it's a presentation concern, not
+        detection or tracking logic."""
+        annotated = frame.copy()
+        for tr in result.track_results:
+            x1, y1, x2, y2 = (int(v) for v in tr.track.bbox)
+            color = (0, 0, 255) if tr.risk.severity == "HIGH" else (0, 165, 255) if tr.risk.severity == "MEDIUM" else (0, 200, 0)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+            label = f"{tr.track.track_id} {tr.track.class_name} {tr.risk.score}"
+            cv2.putText(annotated, label, (x1, max(0, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        return annotated
 
 
 if __name__ == "__main__":
-    cam_cfg = CAMERAS[0]
+    from pipeline import SurveillancePipeline
+    from services.camera_service import build_camera_context
 
-    def _print_event(camera_id, track_id, cls_name, score, breakdown, save_evidence):
+    logging.basicConfig(level=logging.INFO)
+    cfg = config.CAMERAS[0]
+    context = build_camera_context(cfg)
+    pipeline = SurveillancePipeline()
+
+    def _print_event(camera_id, track_id, cls_name, score, breakdown):
         print(f"[{camera_id}] track={track_id} ({cls_name}) score={score} -> {breakdown}")
+        return None
 
-    worker = CameraWorker(cam_cfg, on_event=_print_event)
-    print(f"Running on {cam_cfg['source']} ... press Ctrl+C to stop")
+    worker = CameraWorker(context, pipeline, on_event=_print_event)
+    print(f"Running on {cfg['source']} ... press Ctrl+C to stop")
     start = time.time()
-    worker.run()
+    try:
+        worker.run()
+    except KeyboardInterrupt:
+        worker.stop()
     print(f"Done in {time.time() - start:.1f}s")
