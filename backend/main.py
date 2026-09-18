@@ -2,12 +2,13 @@ import asyncio
 import json
 import sys
 import threading
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -27,6 +28,7 @@ app = FastAPI()
 CONNECTIONS: list[WebSocket] = []
 MAIN_LOOP: asyncio.AbstractEventLoop | None = None
 WORKERS: list[CameraWorker] = []
+LATEST_JPEG_FRAMES: dict[str, bytes] = {}
 
 
 async def broadcast(message: dict):
@@ -41,11 +43,25 @@ async def broadcast(message: dict):
 
 
 def on_frame(camera_id, annotated_frame):
-    cv2.imwrite(
-        str(LIVE_DIR / f"{camera_id}.jpg"),
-        annotated_frame,
-        [cv2.IMWRITE_JPEG_QUALITY, 80],
-    )
+    # Encode JPEG in memory for ultra-fast, lock-free live streaming
+    ok, buf = cv2.imencode(".jpg", annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    if not ok:
+        print(f"[{camera_id}] Failed to encode JPEG")
+        return
+
+    data = buf.tobytes()
+    LATEST_JPEG_FRAMES[camera_id] = data
+
+    # Also persist to disk atomically
+    target = LIVE_DIR / f"{camera_id}.jpg"
+    tmp_path = LIVE_DIR / f"{camera_id}_tmp.jpg"
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(data)
+        os.replace(str(tmp_path), str(target))
+    except Exception as exc:
+        print(f"[{camera_id}] Failed to write/replace disk JPEG: {exc}")
+
 
 
 def on_event(camera_id, track_id, cls_name, score, breakdown, save_evidence):
@@ -84,9 +100,29 @@ def startup():
         threading.Thread(target=worker.run, daemon=True).start()
 
 
+@app.get("/live/{camera_id}.jpg")
+def get_live_frame(camera_id: str):
+    data = LATEST_JPEG_FRAMES.get(camera_id)
+    if data:
+        return Response(
+            content=data,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
+        )
+    target = LIVE_DIR / f"{camera_id}.jpg"
+    if target.exists():
+        return FileResponse(
+            str(target),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+        )
+    return Response(status_code=404)
+
+
 @app.get("/cameras")
 def get_cameras():
     return db.list_cameras()
+
 
 
 @app.get("/events")

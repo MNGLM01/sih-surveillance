@@ -32,11 +32,17 @@ Restricted zones are defined per-camera in `backend/config.py` as pixel rectangl
 ## Validating each piece
 
 ```bash
-python backend/risk.py           # risk-scoring self-check
-python backend/db.py             # storage self-check
-python backend/camera_worker.py  # detection+tracking+risk, prints events to console
+python backend/test_bytetrack_pipeline.py  # automated ByteTrack multi-object tracking test suite
+python backend/risk.py                     # risk-scoring self-check
+python backend/db.py                       # storage self-check
+python backend/camera_worker.py            # detection+tracking+risk, prints events to console
 ```
+
+## Tracker Configuration
+
+ByteTrack hyperparameters are calibrated in `backend/bytetrack.yaml` (matching thresholds, Kalman filter tracking buffer, and confidence cutoffs). Modify this file directly to adapt to specific CCTV resolutions or camera angles.
 
 ## Architecture
 
 See `docs/architecture.md` for the SIH submission writeup (problem, architecture, MVP vs advanced features, differentiator).
+

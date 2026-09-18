@@ -1,0 +1,10 @@
+# Ultralytics ByteTrack configuration for CCTV Surveillance (SIH26187)
+# Docs: https://docs.ultralytics.com/modes/track
+
+tracker_type: bytetrack # Tracker backend: bytetrack
+track_high_thresh: 0.25 # First-stage match threshold; detections above this are matched first
+track_low_thresh: 0.1   # Second-stage threshold for low-score detections; recovers occluded objects
+new_track_thresh: 0.30  # Start a new track if unconfirmed detection has confidence >= this threshold
+track_buffer: 50        # Frames to keep lost tracks alive (~1.7s @ 30fps, handles temporary occlusions)
+match_thresh: 0.75      # Association similarity threshold (lower = more forgiving Kalman-IoU matching)
+fuse_score: True        # Fuse detection confidence score with motion/IoU for matching

@@ -83,12 +83,20 @@ class TrackHistory:
         t["last_seen"] = now
         t["positions"].append((now, *position))
 
+    def has_track(self, track_id):
+        return track_id in self._tracks
+
     def loiter_seconds(self, track_id):
-        t = self._tracks[track_id]
+        t = self._tracks.get(track_id)
+        if not t:
+            return 0
         return t["last_seen"] - t["first_seen"]
 
     def erratic_speed(self, track_id):
-        positions = self._tracks[track_id]["positions"]
+        t = self._tracks.get(track_id)
+        if not t:
+            return False
+        positions = t["positions"]
         if len(positions) < 4:
             return False
         deltas = [
@@ -98,7 +106,16 @@ class TrackHistory:
         return statistics.pstdev(deltas) > ERRATIC_SPEED_THRESHOLD
 
     def signals(self, track_id, zone_rect, force_after_hours=False):
-        t = self._tracks[track_id]
+        t = self._tracks.get(track_id)
+        if not t or not t["positions"]:
+            return {
+                "zone_intrusion": False,
+                "zone_name": "Restricted Zone",
+                "loiter_seconds": 0,
+                "object_class": "person",
+                "is_after_hours": is_after_hours(force_after_hours),
+                "erratic_speed": False,
+            }
         cx, cy = t["positions"][-1][1], t["positions"][-1][2]
         return {
             "zone_intrusion": in_zone((cx, cy), zone_rect),
@@ -115,6 +132,20 @@ class TrackHistory:
         is_high = score > HIGH_BAND
         self._last_band[track_id] = "HIGH" if is_high else "LOW"
         return is_high and not was_high
+
+    def cleanup_stale(self, now=None, max_idle_seconds=300):
+        """Evicts tracks not seen within max_idle_seconds to prevent memory creep."""
+        if now is None:
+            now = time.time()
+        stale_ids = [
+            tid for tid, data in self._tracks.items()
+            if (now - data.get("last_seen", now)) > max_idle_seconds
+        ]
+        for tid in stale_ids:
+            self._tracks.pop(tid, None)
+            self._last_band.pop(tid, None)
+        return len(stale_ids)
+
 
 
 def demo():
