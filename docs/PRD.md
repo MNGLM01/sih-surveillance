@@ -112,16 +112,7 @@ SQLite (events + evidence) ---> WebSocket broadcast
                         Dashboard: live feed + map + alert feed + history
 ```
 
-**Modules (as implemented):**
-
-| Module | File | Responsibility |
-|---|---|---|
-| Config | `backend/config.py` | Camera list: id, source, lat/lon, restricted-zone rectangle |
-| Ingestion + pipeline | `backend/camera_worker.py` | Per-camera thread: capture → detect+track → event/risk → evidence buffer → callbacks |
-| Risk engine | `backend/risk.py` | Zone/loitering signal derivation, `compute_risk()`, per-track history, self-check |
-| Storage | `backend/db.py` | SQLite schema + helpers (cameras, events) |
-| API | `backend/main.py` | FastAPI: REST routes, `/ws/live` WebSocket, static dashboard hosting, startup wiring |
-| Dashboard | `frontend/index.html`, `app.js`, `style.css` | Leaflet map, live feed, alert feed, history — vanilla JS, no build step |
+**Modules (as implemented):** the single-file `camera_worker.py` described in the original submission has since been decomposed into `detector.py` / `tracker.py` / `behavior.py` / `risk.py` / `incident.py` / `pipeline.py` / `services/camera_service.py`, each with one responsibility, plus a new `incidents` table separate from `events`. See `docs/architecture.md` §3-4 for the current module table and multi-camera concurrency model — this section is kept as the original hackathon-submission snapshot and is no longer fully accurate to the code.
 
 **Concurrency model:** one Python thread per camera running its own capture + inference + risk loop; FastAPI's own asyncio loop handles the API/WebSocket layer; cross-thread events are handed to the event loop via `asyncio.run_coroutine_threadsafe`. No message queue, no multiprocessing — sufficient at 2-4 camera scale and avoids infrastructure the hackathon timeline doesn't need.
 
