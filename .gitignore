@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 data/surveillance.db
 evidence_clips/*.mp4
+anpr_evidence/
+scratch/
 frontend/live/*.jpg
 *.pt
 *.code-workspace

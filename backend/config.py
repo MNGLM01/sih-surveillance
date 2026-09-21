@@ -1,39 +1,69 @@
 import os
 from pathlib import Path
 
-SAMPLE_VIDEO = os.path.join(os.path.dirname(__file__), "..", "sample_videos", "people-walking.mp4")
+SAMPLE_VIDEOS_DIR = Path(__file__).resolve().parent.parent / "sample_videos"
+SAMPLE_VIDEO = os.path.join(str(SAMPLE_VIDEOS_DIR), "people-walking.mp4")
 
 # Zone rectangles are normalized (0..1) fractions of frame width/height, so they
-# no longer assume a fixed source resolution. These were tuned by eye against
-# the bundled 768x432 sample video: (250,150,550,400)px -> divide by (768,432).
-_MAIN_GATE_ZONE = {"name": "Main Gate Restricted Zone", "rect_norm": (250 / 768, 150 / 432, 550 / 768, 400 / 432)}
-_NORTH_FENCE_ZONE = {"name": "North Fence Restricted Zone", "rect_norm": (100 / 768, 100 / 432, 400 / 432, 350 / 432)}
-
-# Two cameras by default (both reading the same sample video) so multi-camera
-# concurrency is exercised out of the box without needing extra footage.
-# Add a real camera by appending an entry; "source" accepts a file path,
-# webcam index (0), or an rtsp:// URL - same cv2.VideoCapture call for all three.
-CAMERAS = [
-    {
-        "id": "cam1",
-        "name": "Main Gate",
-        "source": SAMPLE_VIDEO,
-        "lat": 28.6139,
-        "lon": 77.2090,
-        "zones": [_MAIN_GATE_ZONE],
-    },
-    {
-        "id": "cam2",
-        "name": "North Fence",
-        "source": SAMPLE_VIDEO,
-        "lat": 28.6155,
-        "lon": 77.2101,
-        "zones": [_NORTH_FENCE_ZONE],
-    },
+# work across any source resolution.
+_DEFAULT_ZONES = [
+    {"name": "Restricted Zone Alpha", "rect_norm": (0.25, 0.25, 0.75, 0.85)},
+    {"name": "Restricted Zone Beta", "rect_norm": (0.15, 0.20, 0.85, 0.80)},
+    {"name": "Perimeter Security Zone", "rect_norm": (0.20, 0.30, 0.80, 0.90)},
+    {"name": "Gate Entry Zone", "rect_norm": (0.30, 0.35, 0.70, 0.85)},
 ]
 
+_DEFAULT_CAM_NAMES = ["Main Gate (Cam 1)", "North Fence (Cam 2)", "South Perimeter (Cam 3)", "East Gate (Cam 4)"]
+_DEFAULT_COORDS = [
+    (28.6139, 77.2090),
+    (28.6155, 77.2101),
+    (28.6125, 77.2085),
+    (28.6148, 77.2115),
+]
+
+def discover_cameras(target_count: int = 4) -> list[dict]:
+    """Scans sample_videos folder and strictly matches only videos named
+    Cam1, Cam2, Cam3, and Cam4 (case-insensitive, e.g. Cam1.mp4, cam2.mp4, etc.).
+    Any other videos in the folder are strictly ignored.
+    If a specific CamX video is not found, falls back to SAMPLE_VIDEO so all 4 cameras operate."""
+    valid_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+
+    # Index files matching Cam1, Cam2, Cam3, Cam4
+    cam_file_map = {}
+    if SAMPLE_VIDEOS_DIR.is_dir():
+        for item in SAMPLE_VIDEOS_DIR.iterdir():
+            if item.is_file() and item.suffix.lower() in valid_exts and not item.name.startswith("."):
+                stem_lower = item.stem.strip().lower()
+                # Check if file stem matches cam1, cam2, cam3, cam4
+                for idx in range(1, target_count + 1):
+                    key = f"cam{idx}"
+                    if stem_lower == key or stem_lower.replace(" ", "") == key or stem_lower.replace("_", "") == key:
+                        cam_file_map[key] = str(item)
+
+    cameras = []
+    for idx in range(target_count):
+        cam_id = f"cam{idx + 1}"
+        src = cam_file_map.get(cam_id, SAMPLE_VIDEO)
+        video_filename = Path(src).name
+        cam_name = f"Camera {idx + 1} ({video_filename})"
+        lat, lon = _DEFAULT_COORDS[idx % len(_DEFAULT_COORDS)]
+        zone = _DEFAULT_ZONES[idx % len(_DEFAULT_ZONES)]
+
+        cameras.append({
+            "id": cam_id,
+            "name": cam_name,
+            "source": src,
+            "lat": lat,
+            "lon": lon,
+            "zones": [zone],
+        })
+    return cameras
+
+# Configured cameras list (automatically discovered on load)
+CAMERAS = discover_cameras(4)
+
 # Force after-hours risk signal on regardless of wall-clock time, for daytime demos.
-FORCE_AFTER_HOURS = os.environ.get("FORCE_AFTER_HOURS", "false").lower() == "true"
+FORCE_AFTER_HOURS = os.environ.get("FORCE_AFTER_HOURS", "true").lower() == "true"
 AFTER_HOURS_START_HOUR = 22
 AFTER_HOURS_END_HOUR = 6
 
@@ -46,6 +76,14 @@ VEHICLE_STOPPED_SPEED_PX = 4  # avg px/frame displacement below this counts as "
 REPEATED_VISITS_THRESHOLD = 3  # zone re-entries before flagging as repeated
 CROWD_MIN_COUNT = 4
 CROWD_RADIUS_PX = 150
+
+# --- Streaming / FPS Optimization ---
+# Process full ML pipeline (YOLO + tracking + behavior + ANPR) only every Nth
+# frame.  Intermediate frames are annotated with the last known results and
+# pushed for display, giving smooth video without the per-frame ML cost.
+PIPELINE_SKIP_FRAMES = int(os.environ.get("PIPELINE_SKIP_FRAMES", "2"))
+STREAM_JPEG_QUALITY = int(os.environ.get("STREAM_JPEG_QUALITY", "65"))
+STREAM_MAX_WIDTH = int(os.environ.get("STREAM_MAX_WIDTH", "640"))
 
 # Risk weights - named, additive, capped at 100 (see risk.py). Override the
 # alert threshold per env for unfamiliar footage without editing source.
@@ -82,3 +120,14 @@ DETECTOR_CONFIDENCE = 0.25
 BASE_DIR = Path(__file__).parent.parent
 DATA_DIR = BASE_DIR / "data"
 EVIDENCE_DIR = BASE_DIR / "evidence_clips"
+
+# --- ANPR (Automatic Number Plate Recognition) ---
+ANPR_ENABLED = os.environ.get("ANPR_ENABLED", "true").lower() == "true"
+ANPR_FRAME_INTERVAL = int(os.environ.get("ANPR_FRAME_INTERVAL", "5"))
+ANPR_PLATE_MODEL_PATH = os.environ.get("ANPR_PLATE_MODEL_PATH", "license_plate_detector.pt")
+ANPR_PLATE_CONFIDENCE = float(os.environ.get("ANPR_PLATE_CONFIDENCE", "0.4"))
+ANPR_OCR_CONFIDENCE = float(os.environ.get("ANPR_OCR_CONFIDENCE", "0.35"))
+ANPR_MIN_CONSENSUS_READINGS = int(os.environ.get("ANPR_MIN_CONSENSUS_READINGS", "2"))
+ANPR_MAX_TRACK_HISTORY = int(os.environ.get("ANPR_MAX_TRACK_HISTORY", "50"))
+ANPR_EVIDENCE_IMAGES = os.environ.get("ANPR_EVIDENCE_IMAGES", "true").lower() == "true"
+ANPR_EVIDENCE_DIR = BASE_DIR / "anpr_evidence"

@@ -25,6 +25,26 @@ CREATE TABLE IF NOT EXISTS incidents (
     reasons_json TEXT, evidence_path TEXT,
     FOREIGN KEY(camera_id) REFERENCES cameras(id)
 );
+CREATE TABLE IF NOT EXISTS anpr_detections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    camera_id TEXT,
+    track_id TEXT,
+    vehicle_type TEXT,
+    plate_number TEXT,
+    raw_ocr_text TEXT,
+    ocr_confidence REAL,
+    plate_detection_confidence REAL,
+    consensus_score REAL,
+    vehicle_bbox TEXT,
+    plate_bbox TEXT,
+    timestamp TEXT,
+    evidence_image_path TEXT,
+    validation_status TEXT,
+    FOREIGN KEY(camera_id) REFERENCES cameras(id)
+);
+CREATE INDEX IF NOT EXISTS idx_anpr_plate ON anpr_detections(plate_number);
+CREATE INDEX IF NOT EXISTS idx_anpr_camera ON anpr_detections(camera_id);
+CREATE INDEX IF NOT EXISTS idx_anpr_timestamp ON anpr_detections(timestamp);
 """
 
 
@@ -170,6 +190,84 @@ def list_incidents(camera_id=None, status=None):
     conn.close()
     for r in rows:
         r["reasons"] = json.loads(r.pop("reasons_json"))
+    return rows
+
+
+# --- ANPR detections ---
+
+def insert_anpr_detection(
+    camera_id, track_id, vehicle_type, plate_number, raw_ocr_text,
+    ocr_confidence, plate_detection_confidence, consensus_score,
+    vehicle_bbox, plate_bbox, timestamp, evidence_image_path, validation_status,
+) -> int | None:
+    """Insert an ANPR detection. Returns the row id, or None if a duplicate
+    (same camera + track + plate) already exists."""
+    conn = get_conn()
+    existing = conn.execute(
+        "SELECT id FROM anpr_detections WHERE camera_id = ? AND track_id = ? AND plate_number = ?",
+        (camera_id, track_id, plate_number),
+    ).fetchone()
+    if existing:
+        conn.close()
+        return None  # duplicate
+    cur = conn.execute(
+        """INSERT INTO anpr_detections
+           (camera_id, track_id, vehicle_type, plate_number, raw_ocr_text,
+            ocr_confidence, plate_detection_confidence, consensus_score,
+            vehicle_bbox, plate_bbox, timestamp, evidence_image_path, validation_status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (camera_id, track_id, vehicle_type, plate_number, raw_ocr_text,
+         ocr_confidence, plate_detection_confidence, consensus_score,
+         json.dumps(vehicle_bbox), json.dumps(plate_bbox), timestamp,
+         evidence_image_path, validation_status),
+    )
+    conn.commit()
+    row_id = cur.lastrowid
+    conn.close()
+    return row_id
+
+
+def list_anpr_detections(camera_id=None, since=None, limit=100):
+    query = "SELECT * FROM anpr_detections"
+    clauses, params = [], []
+    if camera_id:
+        clauses.append("camera_id = ?")
+        params.append(camera_id)
+    if since:
+        clauses.append("timestamp >= ?")
+        params.append(since)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY timestamp DESC LIMIT ?"
+    params.append(limit)
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute(query, params)]
+    conn.close()
+    for r in rows:
+        if r.get("vehicle_bbox"):
+            r["vehicle_bbox"] = json.loads(r["vehicle_bbox"])
+        if r.get("plate_bbox"):
+            r["plate_bbox"] = json.loads(r["plate_bbox"])
+    return rows
+
+
+def search_anpr_plate(plate_query, camera_id=None, limit=50):
+    """Search ANPR detections by plate number (partial, case-insensitive)."""
+    query = "SELECT * FROM anpr_detections WHERE plate_number LIKE ?"
+    params = [f"%{plate_query.upper()}%"]
+    if camera_id:
+        query += " AND camera_id = ?"
+        params.append(camera_id)
+    query += " ORDER BY timestamp DESC LIMIT ?"
+    params.append(limit)
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute(query, params)]
+    conn.close()
+    for r in rows:
+        if r.get("vehicle_bbox"):
+            r["vehicle_bbox"] = json.loads(r["vehicle_bbox"])
+        if r.get("plate_bbox"):
+            r["plate_bbox"] = json.loads(r["plate_bbox"])
     return rows
 
 

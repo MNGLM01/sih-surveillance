@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
 from behavior import BehaviorEngine
 from camera_worker import STATUS_STOPPED, CameraWorker
 from detector import Detector
@@ -32,6 +33,7 @@ class CameraContext:
     tracker: Tracker
     behavior_engine: BehaviorEngine
     incident_manager: IncidentManager
+    anpr_engine: object = None  # ANPREngine or None if disabled
     evidence: object = None  # set once fps is known, by CameraWorker
     status: str = STATUS_STOPPED
     error: str | None = None
@@ -40,6 +42,22 @@ class CameraContext:
 def build_camera_context(cfg: dict) -> CameraContext:
     detector = Detector()
     zones = [Zone(name=z["name"], rect_norm=z["rect_norm"]) for z in cfg.get("zones", [])]
+
+    anpr_engine = None
+    if config.ANPR_ENABLED:
+        from anpr import ANPREngine
+        config.ANPR_EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+        anpr_engine = ANPREngine(
+            plate_model_path=config.ANPR_PLATE_MODEL_PATH,
+            plate_confidence=config.ANPR_PLATE_CONFIDENCE,
+            ocr_confidence_threshold=config.ANPR_OCR_CONFIDENCE,
+            min_consensus_readings=config.ANPR_MIN_CONSENSUS_READINGS,
+            max_track_history=config.ANPR_MAX_TRACK_HISTORY,
+            frame_interval=config.ANPR_FRAME_INTERVAL,
+            save_evidence=config.ANPR_EVIDENCE_IMAGES,
+            evidence_dir=config.ANPR_EVIDENCE_DIR,
+        )
+
     return CameraContext(
         camera_id=cfg["id"],
         name=cfg["name"],
@@ -51,6 +69,7 @@ def build_camera_context(cfg: dict) -> CameraContext:
         tracker=Tracker(cfg["id"], detector),
         behavior_engine=BehaviorEngine(),
         incident_manager=IncidentManager(),
+        anpr_engine=anpr_engine,
     )
 
 
@@ -58,12 +77,13 @@ class CameraService:
     """start_camera/stop_camera/restart_camera/get_camera_status/start_all/
     stop_all - the lifecycle surface main.py drives."""
 
-    def __init__(self, camera_configs, pipeline, on_frame=None, on_event=None, on_incident=None, on_incident_evidence=None):
+    def __init__(self, camera_configs, pipeline, on_frame=None, on_event=None, on_incident=None, on_incident_evidence=None, on_anpr=None):
         self.pipeline = pipeline
         self.on_frame = on_frame
         self.on_event = on_event
         self.on_incident = on_incident
         self.on_incident_evidence = on_incident_evidence
+        self.on_anpr = on_anpr
         self.contexts: dict[str, CameraContext] = {cfg["id"]: build_camera_context(cfg) for cfg in camera_configs}
         self._workers: dict[str, CameraWorker] = {}
         self._threads: dict[str, threading.Thread] = {}
@@ -77,6 +97,7 @@ class CameraService:
             context, self.pipeline,
             on_frame=self.on_frame, on_event=self.on_event,
             on_incident=self.on_incident, on_incident_evidence=self.on_incident_evidence,
+            on_anpr=self.on_anpr,
         )
         self._workers[camera_id] = worker
         thread = threading.Thread(target=worker.run, daemon=True, name=f"camera-{camera_id}")
