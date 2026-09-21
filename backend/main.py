@@ -16,7 +16,8 @@ from services.camera_service import CameraService
 import db
 
 FRONTEND_DIR = BASE_DIR / "frontend"
-LIVE_DIR = FRONTEND_DIR / "live"
+FRONTEND_DIST_DIR = FRONTEND_DIR / "dist"  # `npm run build` output (React/Vite) - not committed
+LIVE_DIR = FRONTEND_DIR / "live"  # runtime-generated snapshots, kept outside dist on purpose
 LIVE_DIR.mkdir(parents=True, exist_ok=True)
 EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -193,4 +194,21 @@ async def ws_live(websocket: WebSocket):
             CONNECTIONS.remove(websocket)
 
 
-app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+app.mount("/live", StaticFiles(directory=LIVE_DIR), name="live-frames")
+
+if FRONTEND_DIST_DIR.is_dir():
+    # Production: FastAPI serves the built React SPA directly (`npm run build`
+    # in frontend/ first). REST/WS routes above take precedence over this
+    # catch-all since FastAPI resolves explicit routes before a mount.
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST_DIR, html=True), name="frontend")
+else:
+    # Dev: `npm run dev` (Vite) serves the SPA on its own port and proxies
+    # API/WS/live-frame requests here - see frontend/vite.config.ts. Nothing
+    # to mount at "/" in that mode.
+    import logging
+
+    logging.getLogger("uvicorn").warning(
+        "%s not found - run `npm run build` in frontend/ for FastAPI to serve the dashboard directly, "
+        "or run `npm run dev` separately for local development.",
+        FRONTEND_DIST_DIR,
+    )

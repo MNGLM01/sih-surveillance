@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+@theme {
+  /* Severity - the one place these colors are defined; every severity-aware
+     component reads from here, never a hard-coded hex. */
+  --color-critical: #e11d3c;
+  --color-critical-ink: #ff6b81;
+  --color-high: #ea580c;
+  --color-high-ink: #ff9d52;
+  --color-medium: #d69e0a;
+  --color-medium-ink: #f2c14e;
+  --color-low: #3b82f6;
+  --color-low-ink: #7dabfb;
+
+  /* Camera / connection state */
+  --color-live: #22c55e;
+  --color-degraded: #d69e0a;
+  --color-offline: #6b7787;
+
+  /* Surface hierarchy (dark command-center base) */
+  --color-bg: #090b0f;
+  --color-panel: #10131a;
+  --color-panel-raised: #151923;
+  --color-panel-inset: #0c0f15;
+  --color-border: #1f2530;
+  --color-border-strong: #2c3542;
+
+  /* Type */
+  --color-ink: #e7eaf0;
+  --color-ink-muted: #97a2b3;
+  --color-ink-dim: #5e6779;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background-color: color-mix(in srgb, var(--color-low) 35%, transparent);
+}
+
+/* Thin, unobtrusive scrollbars - a command center shouldn't have default OS chrome fighting for attention. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--color-border-strong);
+  border-radius: 9999px;
+}

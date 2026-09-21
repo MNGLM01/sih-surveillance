@@ -1,6 +1,6 @@
 # SIH Surveillance Prototype
 
-AI-powered CCTV surveillance: detection -> tracking -> zone/loitering events -> explainable risk scoring -> real-time alerts -> map + dashboard.
+AI-powered CCTV surveillance: detection -> tracking -> behavior analysis -> explainable risk scoring -> incident lifecycle -> evidence -> a command-center dashboard.
 
 ## Setup (one-time)
 
@@ -9,6 +9,8 @@ brew install python@3.11
 cd sih-surveillance
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+
+cd frontend && npm install && npm run build && cd ..
 ```
 
 ## Run
@@ -18,7 +20,9 @@ source .venv/bin/activate
 uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open http://127.0.0.1:8000 — map with camera pins, live annotated feed, real-time alert list, event history with evidence-clip playback.
+Open http://127.0.0.1:8000 — the Border AI Command Center: multi-camera live surveillance, severity-prioritized alerts, incident investigation with evidence playback, track intelligence, analytics, camera health, and an audit trail. See `frontend/README.md` for the frontend's own structure and its "demo data" honesty model.
+
+For frontend development with hot reload instead of a static build, run the backend as above and, separately, `cd frontend && npm run dev` (http://localhost:5173, proxies API/WS calls to :8000).
 
 The sample video (`sample_videos/people-walking.mp4`) loops automatically so the demo can run repeatedly without restarting.
 

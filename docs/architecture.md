@@ -36,7 +36,9 @@ IncidentManager (dedup/cooldown -> lifecycle-managed Incident)
 SQLite (events + incidents + evidence) ---> WebSocket broadcast
                                                     |
                                                     v
-                                    Dashboard: live feed + map + alert feed + history
+                        Border AI Command Center (React) - multi-camera view,
+                        severity-prioritized alerts, incident investigation,
+                        track intelligence, analytics, camera health, audit
 ```
 
 Each pipeline stage only understands the schema the stage before it produces (`Detection` -> `Track` -> `BehaviorEvent` -> `RiskResult` -> `Incident`, all defined in `backend/schemas.py`), not that stage's internals. This is what lets the modules be developed, tested, and swapped independently.
@@ -58,7 +60,7 @@ Each pipeline stage only understands the schema the stage before it produces (`D
 | Ingestion | `backend/camera_worker.py` | Owns one `cv2.VideoCapture` per camera thread; bounded retry/backoff on failure so one bad camera can't take others down; feeds frames to the pipeline. |
 | Storage | `backend/db.py` | SQLite: `cameras`, `events` (legacy per-crossing rows, unchanged shape), `incidents` (new, with lifecycle status) |
 | API | `backend/main.py` | FastAPI: REST routes, `/ws/live` WebSocket, static dashboard hosting, camera-service wiring |
-| Dashboard | `frontend/index.html`, `app.js`, `style.css` | Leaflet map, live feed, alert feed, history — vanilla JS, no build step, unchanged by this refactor |
+| Dashboard | `frontend/` (React + TypeScript + Tailwind, built with Vite) | Border AI Command Center: multi-camera surveillance, severity-prioritized alert center, incident investigation with evidence playback, track intelligence, vehicle intelligence (not connected - no ANPR backend yet), analytics, camera health, audit log. `backend/main.py` serves `frontend/dist` in production; see `frontend/README.md`. Every non-trivial value is tagged live/demo/planned/not-connected so the UI never implies a backend capability that doesn't exist. |
 
 ## 4. Multi-Camera Concurrency
 
@@ -91,7 +93,7 @@ This was chosen over a shared-inference-queue architecture (one model process fe
 
 ## 6. Example User Journey
 
-An operator opens the dashboard and sees camera pins on a map, colored by current risk level. At 11pm, a person enters a restricted zone near the main gate and lingers. The risk engine combines "zone intrusion" (+40) and "after-hours" (+15) into a score of 55 — crossing the alert threshold. `IncidentManager` opens one `Incident` for that track (not one per frame while it stays HIGH), the operator sees a real-time alert with the exact score breakdown, and a short evidence clip covering ~5s before and ~10s after the crossing, without having had to watch that camera at all.
+An operator opens the Command Center and sees every camera live, an alert center prioritized by severity, and which cameras currently have an open incident. At 11pm, a person enters a restricted zone near the main gate and lingers. The risk engine combines "zone intrusion" (+40) and "after-hours" (+15) into a score of 55 — crossing the alert threshold. `IncidentManager` opens one `Incident` for that track (not one per frame while it stays HIGH), the operator sees a real-time alert with the exact score breakdown, clicks through to the incident's timeline and evidence clip (~5s before, ~10s after the crossing), and acknowledges or resolves it — without having had to watch that camera at all.
 
 ## 7. Tech Stack & Why
 
@@ -100,7 +102,7 @@ An operator opens the dashboard and sees camera pins on a map, colored by curren
 | Detection + Tracking | Ultralytics YOLO11n + bundled ByteTrack | Pretrained — no training data or time needed; ByteTrack ships with the same library, no separate Re-ID/embedding dependency |
 | Backend | FastAPI + uvicorn | Single process serves REST + WebSocket + static files, async-native |
 | Storage | SQLite | Zero-ops, file-based, plenty for demo scale (2-4 cameras) |
-| Frontend | Vanilla HTML/JS + Leaflet | No build step — nothing to break on a judge's wifi |
+| Frontend | React + TypeScript + Tailwind (Vite) | A command-center UI (10 routes, severity-aware design system, live/demo data tagging) outgrew a no-build vanilla page; `backend/main.py` still serves the built output as static files, so it's one process to run |
 | Concurrency | One thread per camera, isolated `CameraContext` | 2-4 demo feeds don't need a distributed worker fleet; see §4 for the scale-up path |
 
 ## 8. Key Differentiator
