@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
+import torch
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -13,7 +14,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config import BASE_DIR, CAMERAS, EVIDENCE_DIR, ANPR_EVIDENCE_DIR, discover_cameras
 import config
 from pipeline import SurveillancePipeline
-from schemas import IncidentStatus
+from pydantic import BaseModel
+from schemas import IncidentStatus, Zone
 from services.camera_service import CameraService
 import db
 
@@ -153,7 +155,8 @@ def on_incident(incident, is_new):
         incident.incident_id = db.insert_incident(incident)
         broadcast_threadsafe({"type": "incident_created", "data": _incident_payload(incident)})
     else:
-        db.update_incident(incident)
+        if incident.incident_id is not None:
+            db.update_incident(incident)
         broadcast_threadsafe({"type": "incident_updated", "data": _incident_payload(incident)})
     return incident.incident_id
 
@@ -210,6 +213,7 @@ def on_anpr(camera_id, anpr_result):
 @app.on_event("startup")
 def startup():
     global MAIN_LOOP, CAMERA_SERVICE
+    torch.set_num_threads(3)  # Bound PyTorch CPU threads to prevent thrashing across 4 camera workers
     MAIN_LOOP = asyncio.get_event_loop()
     active_cameras = discover_cameras(4)
     db.init_db(active_cameras)
@@ -271,6 +275,49 @@ def restart_camera(camera_id: str):
     return CAMERA_SERVICE.get_camera_status(camera_id)
 
 
+class ZonePayload(BaseModel):
+    name: str
+    rect_norm: list[float]
+
+
+@app.get("/cameras/{camera_id}/zones")
+def get_camera_zones(camera_id: str):
+    return db.get_camera_zones(camera_id)
+
+
+@app.put("/cameras/{camera_id}/zones")
+def update_camera_zones(camera_id: str, zones: list[ZonePayload]):
+    zones_data = [z.model_dump() if hasattr(z, "model_dump") else z.dict() for z in zones]
+    db.update_camera_zones(camera_id, zones_data)
+    if CAMERA_SERVICE:
+        zone_objs = [Zone(name=z["name"], rect_norm=tuple(z["rect_norm"])) for z in zones_data]
+        CAMERA_SERVICE.update_zones(camera_id, zone_objs)
+    broadcast_threadsafe({
+        "type": "camera_zones_updated",
+        "camera_id": camera_id,
+        "zones": zones_data,
+    })
+    return {"status": "ok", "camera_id": camera_id, "zones": zones_data}
+
+
+class CameraRestrictedPayload(BaseModel):
+    is_restricted: bool
+
+
+@app.put("/cameras/{camera_id}/restricted")
+def set_camera_restricted(camera_id: str, payload: CameraRestrictedPayload):
+    db.set_camera_restricted(camera_id, payload.is_restricted)
+    if CAMERA_SERVICE:
+        CAMERA_SERVICE.set_camera_restricted(camera_id, payload.is_restricted)
+    broadcast_threadsafe({
+        "type": "camera_restricted_updated",
+        "camera_id": camera_id,
+        "is_restricted": payload.is_restricted,
+    })
+    return {"status": "ok", "camera_id": camera_id, "is_restricted": payload.is_restricted}
+
+
+
 
 @app.get("/events")
 def get_events(camera_id: str | None = None, since: str | None = None):
@@ -313,7 +360,7 @@ def search_anpr(plate: str, camera_id: str | None = None):
 
 @app.get("/anpr/evidence/{filename}")
 def get_anpr_evidence(filename: str):
-    target = ANPR_EVIDENCE_DIR / filename
+    target = ANPR_EVIDENCE_DIR / Path(filename).name
     if target.exists():
         return FileResponse(str(target), media_type="image/jpeg")
     return Response(status_code=404)
@@ -327,10 +374,19 @@ async def ws_stream(websocket: WebSocket, camera_id: str):
     if camera_id not in FRAME_SUBSCRIBERS:
         FRAME_SUBSCRIBERS[camera_id] = set()
     FRAME_SUBSCRIBERS[camera_id].add(websocket)
+    # Send immediate latest frame so client has instant video without waiting
+    latest = LATEST_JPEG_FRAMES.get(camera_id)
+    if latest:
+        try:
+            await websocket.send_bytes(latest)
+        except Exception:
+            pass
     try:
         while True:
             await websocket.receive_text()  # keep-alive
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
         FRAME_SUBSCRIBERS.get(camera_id, set()).discard(websocket)
 
 
@@ -346,4 +402,36 @@ async def ws_live(websocket: WebSocket):
             CONNECTIONS.remove(websocket)
 
 
-app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+FRONTEND_DIST_DIR = FRONTEND_DIR / "dist"  # `npm run build` output (React/Vite) - not committed
+
+app.mount("/live", StaticFiles(directory=LIVE_DIR), name="live-frames")
+
+if FRONTEND_DIST_DIR.is_dir():
+    # Production: FastAPI serves the built React SPA directly (`npm run build`
+    # in frontend/ first). REST/WS routes above take precedence over this
+    # catch-all since FastAPI resolves explicit routes before a mount.
+    assets_dir = FRONTEND_DIST_DIR / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="frontend-assets")
+
+    @app.get("/{full_path:path}")
+    def serve_spa(full_path: str):
+        target = FRONTEND_DIST_DIR / full_path
+        if full_path and target.is_file():
+            return FileResponse(str(target))
+        index_file = FRONTEND_DIST_DIR / "index.html"
+        if index_file.is_file():
+            return FileResponse(str(index_file))
+        return Response(status_code=404)
+else:
+    # Dev: `npm run dev` (Vite) serves the SPA on its own port and proxies
+    # API/WS/live-frame requests here - see frontend/vite.config.ts. Nothing
+    # to mount at "/" in that mode.
+    import logging
+
+    logging.getLogger("uvicorn").warning(
+        "%s not found - run `npm run build` in frontend/ for FastAPI to serve the dashboard directly, "
+        "or run `npm run dev` separately for local development.",
+        FRONTEND_DIST_DIR,
+    )
+

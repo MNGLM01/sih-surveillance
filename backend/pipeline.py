@@ -30,6 +30,7 @@ class FrameResult:
     tracks: list[Track]
     behavior_events: list[BehaviorEvent]
     track_results: list[TrackResult] = field(default_factory=list)
+    ended_incidents: list[Incident] = field(default_factory=list)
 
 
 def _events_for_track(events: list[BehaviorEvent], track_id: str) -> list[BehaviorEvent]:
@@ -52,8 +53,10 @@ class SurveillancePipeline:
         detections, tracks = context.tracker.update(frame, timestamp)
 
         frame_h, frame_w = frame.shape[:2]
+        is_restricted = getattr(context, "is_restricted", False)
         behavior_events = context.behavior_engine.analyze(
             context.camera_id, tracks, timestamp, context.zones, frame_size=(frame_w, frame_h),
+            is_restricted=is_restricted,
         )
 
         track_results = []
@@ -66,4 +69,19 @@ class SurveillancePipeline:
                 incident=incident, incident_is_new=is_new,
             ))
 
-        return FrameResult(detections=detections, tracks=tracks, behavior_events=behavior_events, track_results=track_results)
+        # Update incident manager with active track set for disappearance tracking
+        ended_incidents = []
+        if hasattr(context.incident_manager, "on_frame_end"):
+            ended = context.incident_manager.on_frame_end(
+                context.camera_id, {t.track_id for t in tracks}, timestamp
+            )
+            if ended:
+                ended_incidents.extend(ended)
+
+        return FrameResult(
+            detections=detections,
+            tracks=tracks,
+            behavior_events=behavior_events,
+            track_results=track_results,
+            ended_incidents=ended_incidents,
+        )

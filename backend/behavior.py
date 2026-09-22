@@ -14,6 +14,9 @@ from detector import is_vehicle
 from schemas import BehaviorEvent, Track, Zone
 
 EVENT_ZONE_INTRUSION = "ZONE_INTRUSION"
+EVENT_VIRTUAL_FENCE_INTRUSION = "VIRTUAL_FENCE_INTRUSION"
+EVENT_VIRTUAL_FENCE_PROXIMITY = "VIRTUAL_FENCE_PROXIMITY"
+EVENT_RESTRICTED_CAMERA_BREACH = "RESTRICTED_CAMERA_BREACH"
 EVENT_LOITERING = "LOITERING"
 EVENT_AFTER_HOURS = "AFTER_HOURS"
 EVENT_MOVING_TOWARD_ZONE = "MOVING_TOWARD_RESTRICTED_ZONE"
@@ -51,14 +54,24 @@ class BehaviorEngine:
         timestamp: float,
         zones: list[Zone],
         frame_size: tuple[int, int],
+        now_hour: int | None = None,
+        is_restricted: bool = False,
     ) -> list[BehaviorEvent]:
         events: list[BehaviorEvent] = []
         frame_w, frame_h = frame_size
-        after_hours = is_after_hours(config.FORCE_AFTER_HOURS)
+        after_hours = is_after_hours(config.FORCE_AFTER_HOURS, now_hour=now_hour)
 
         if after_hours:
             for track in tracks:
                 events.append(self._event(EVENT_AFTER_HOURS, camera_id, track, timestamp))
+
+        if is_restricted:
+            for track in tracks:
+                if track.class_name == "person":
+                    events.append(self._event(
+                        EVENT_RESTRICTED_CAMERA_BREACH, camera_id, track, timestamp,
+                        metadata={"camera_id": camera_id, "mode": "FULLY_RESTRICTED"},
+                    ))
 
         for track in tracks:
             state = self._state.setdefault(track.track_id, _TrackBehaviorState())
@@ -80,6 +93,11 @@ class BehaviorEngine:
                 break
 
         if in_zone:
+            if track.class_name == "person":
+                events.append(self._event(
+                    EVENT_VIRTUAL_FENCE_INTRUSION, camera_id, track, timestamp,
+                    metadata={"zone_name": zone_name, "is_person": True},
+                ))
             events.append(self._event(EVENT_ZONE_INTRUSION, camera_id, track, timestamp, metadata={"zone_name": zone_name}))
             if not state.was_in_zone:
                 state.zone_visit_count += 1
@@ -88,8 +106,26 @@ class BehaviorEngine:
                         EVENT_REPEATED_ZONE_VISITS, camera_id, track, timestamp,
                         metadata={"zone_name": zone_name, "visit_count": state.zone_visit_count},
                     ))
+        else:
+            if zones and track.class_name == "person":
+                buffer_norm = getattr(config, "VIRTUAL_FENCE_BUFFER_NORM", 0.08)
+                nearest_dist = float("inf")
+                nearest_name = None
+                for zone in zones:
+                    d = zone.distance_norm_to_point(track.center, frame_w, frame_h)
+                    if 0.0 < d <= buffer_norm and d < nearest_dist:
+                        nearest_dist = d
+                        nearest_name = zone.name
+
+                if nearest_name is not None:
+                    events.append(self._event(
+                        EVENT_VIRTUAL_FENCE_PROXIMITY, camera_id, track, timestamp,
+                        metadata={"zone_name": nearest_name, "distance_norm": nearest_dist},
+                    ))
+
         state.was_in_zone = in_zone
         return events
+
 
     def _loitering_events(self, camera_id, track, timestamp):
         dwell = track.last_seen - track.first_seen

@@ -9,6 +9,7 @@ rewritten as "<camera_id>:P-<raw_id>" before leaving this module).
 """
 from collections import deque
 
+import config
 from detector import Detector
 from schemas import Detection, Track
 
@@ -46,6 +47,7 @@ class Tracker:
             classes=self.detector.classes,
             conf=self.detector.confidence,
             tracker=self.tracker_cfg,
+            imgsz=getattr(config, "YOLO_IMGSZ", 480),
             verbose=False,
         )[0]
         detections = self.detector.to_detections(results)
@@ -81,6 +83,8 @@ class Tracker:
         """Called when a looping file source restarts, so a fresh pass over
         the same footage doesn't inherit stale loiter/position history."""
         self._tracks.clear()
+        if hasattr(self.detector, "reset_tracker"):
+            self.detector.reset_tracker()
 
 
 def demo():

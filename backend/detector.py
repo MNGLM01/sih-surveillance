@@ -33,6 +33,19 @@ class Detector:
         results = self.model.predict(frame, classes=self.classes, conf=self.confidence, verbose=False)[0]
         return self.to_detections(results)
 
+    def reset_tracker(self):
+        """Resets the tracker instances inside the YOLO predictor so track IDs do
+        not inflate indefinitely across video loops or sessions."""
+        try:
+            if hasattr(self.model, "predictor") and self.model.predictor is not None:
+                trackers = getattr(self.model.predictor, "trackers", None)
+                if trackers:
+                    for tr in trackers:
+                        if hasattr(tr, "reset"):
+                            tr.reset()
+        except Exception:
+            pass
+
     @staticmethod
     def to_detections(results) -> list[Detection]:
         boxes = results.boxes

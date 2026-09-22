@@ -16,6 +16,9 @@ from detector import is_vehicle
 from schemas import BehaviorEvent, RiskReason, RiskResult
 
 REASON_ZONE_INTRUSION = "RESTRICTED_ZONE_INTRUSION"
+REASON_VIRTUAL_FENCE_INTRUSION = "VIRTUAL_FENCE_INTRUSION"
+REASON_VIRTUAL_FENCE_PROXIMITY = "VIRTUAL_FENCE_PROXIMITY"
+REASON_RESTRICTED_CAMERA_BREACH = "RESTRICTED_CAMERA_BREACH"
 REASON_LOITERING = "LOITERING"
 REASON_VEHICLE_IN_ZONE = "VEHICLE_IN_ZONE"
 REASON_AFTER_HOURS = "AFTER_HOURS"
@@ -25,11 +28,13 @@ REASON_VEHICLE_STOPPED = "VEHICLE_STOPPED"
 REASON_REPEATED_ZONE_VISITS = "REPEATED_ZONE_VISITS"
 REASON_CROWD_FORMATION = "CROWD_FORMATION"
 
-SEVERITY_LOW, SEVERITY_MEDIUM, SEVERITY_HIGH = "LOW", "MEDIUM", "HIGH"
+SEVERITY_LOW, SEVERITY_MEDIUM, SEVERITY_HIGH, SEVERITY_CRITICAL = "LOW", "MEDIUM", "HIGH", "CRITICAL"
 
 
 def _severity(score: int) -> str:
-    if score > config.RISK_HIGH_BAND:
+    if score >= getattr(config, "RISK_CRITICAL_BAND", 90):
+        return SEVERITY_CRITICAL
+    if score >= config.RISK_HIGH_BAND:
         return SEVERITY_HIGH
     if score >= config.RISK_MEDIUM_BAND:
         return SEVERITY_MEDIUM
@@ -44,13 +49,30 @@ class RiskEngine:
         types = {e.event_type for e in events}
         reasons: list[RiskReason] = []
 
-        if "ZONE_INTRUSION" in types:
+        # Fully restricted camera breach (person detected anywhere in camera) -> DANGER (CRITICAL)
+        if "RESTRICTED_CAMERA_BREACH" in types:
+            pts = config.RISK_WEIGHTS.get("RESTRICTED_CAMERA_BREACH", 95)
+            reasons.append(RiskReason(REASON_RESTRICTED_CAMERA_BREACH, pts, f"Restricted camera zone breach (Person detected): +{pts}"))
+
+        # Virtual fence intrusion (person inside virtual fence) -> DANGER (CRITICAL/HIGH)
+        if "VIRTUAL_FENCE_INTRUSION" in types:
+            zone_name = next(e.metadata.get("zone_name", "Virtual Fence") for e in events if e.event_type == "VIRTUAL_FENCE_INTRUSION")
+            pts = config.RISK_WEIGHTS.get("VIRTUAL_FENCE_INTRUSION", 90)
+            reasons.append(RiskReason(REASON_VIRTUAL_FENCE_INTRUSION, pts, f"Virtual fence intrusion ({zone_name}): +{pts}"))
+        elif "ZONE_INTRUSION" in types:
             zone_name = next(e.metadata.get("zone_name", "Restricted Zone") for e in events if e.event_type == "ZONE_INTRUSION")
             pts = config.RISK_WEIGHTS["RESTRICTED_ZONE_INTRUSION"]
             reasons.append(RiskReason(REASON_ZONE_INTRUSION, pts, f"Zone intrusion ({zone_name}): +{pts}"))
             if is_vehicle(object_class):
                 pts = config.RISK_WEIGHTS["VEHICLE_IN_ZONE"]
                 reasons.append(RiskReason(REASON_VEHICLE_IN_ZONE, pts, f"Vehicle in restricted zone: +{pts}"))
+
+        # Near virtual fence (person in perimeter buffer zone) -> MEDIUM
+        if "VIRTUAL_FENCE_PROXIMITY" in types and "VIRTUAL_FENCE_INTRUSION" not in types and "ZONE_INTRUSION" not in types:
+            zone_name = next(e.metadata.get("zone_name", "Virtual Fence") for e in events if e.event_type == "VIRTUAL_FENCE_PROXIMITY")
+            pts = config.RISK_WEIGHTS.get("VIRTUAL_FENCE_PROXIMITY", 45)
+            reasons.append(RiskReason(REASON_VIRTUAL_FENCE_PROXIMITY, pts, f"Near virtual fence ({zone_name}): +{pts}"))
+
 
         loiter_event = next((e for e in events if e.event_type == "LOITERING"), None)
         if loiter_event:
@@ -132,6 +154,7 @@ def demo():
     ]
     result2 = engine.evaluate(events_maxed, "car")
     assert result2.score == 100, f"expected clamp at 100, got {result2.score}"
+    assert result2.severity == SEVERITY_CRITICAL
 
     result3 = engine.evaluate([], "person")
     assert result3.score == 0 and result3.reasons == [] and result3.severity == SEVERITY_LOW

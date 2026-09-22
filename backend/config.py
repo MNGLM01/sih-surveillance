@@ -63,7 +63,8 @@ def discover_cameras(target_count: int = 4) -> list[dict]:
 CAMERAS = discover_cameras(4)
 
 # Force after-hours risk signal on regardless of wall-clock time, for daytime demos.
-FORCE_AFTER_HOURS = os.environ.get("FORCE_AFTER_HOURS", "true").lower() == "true"
+# Defaults to false in real deployments so actual system clock (22:00-06:00) is used.
+FORCE_AFTER_HOURS = os.environ.get("FORCE_AFTER_HOURS", "false").lower() == "true"
 AFTER_HOURS_START_HOUR = 22
 AFTER_HOURS_END_HOUR = 6
 
@@ -77,18 +78,27 @@ REPEATED_VISITS_THRESHOLD = 3  # zone re-entries before flagging as repeated
 CROWD_MIN_COUNT = 4
 CROWD_RADIUS_PX = 150
 
-# --- Streaming / FPS Optimization ---
+# --- Ingestion & Streaming / FPS Optimization ---
+# Maximum dimension for ingested frames (downscales 4K/UHD videos to 1024px).
+# Prevents OpenCV OutOfMemory crashes, saves ~90% RAM, and speeds up YOLO by 4x.
+INGEST_MAX_DIM = int(os.environ.get("INGEST_MAX_DIM", "1024"))
+MAX_STREAM_FPS = float(os.environ.get("MAX_STREAM_FPS", "30.0"))
+YOLO_IMGSZ = int(os.environ.get("YOLO_IMGSZ", "480"))
+
 # Process full ML pipeline (YOLO + tracking + behavior + ANPR) only every Nth
 # frame.  Intermediate frames are annotated with the last known results and
 # pushed for display, giving smooth video without the per-frame ML cost.
-PIPELINE_SKIP_FRAMES = int(os.environ.get("PIPELINE_SKIP_FRAMES", "2"))
+PIPELINE_SKIP_FRAMES = int(os.environ.get("PIPELINE_SKIP_FRAMES", "3"))
 STREAM_JPEG_QUALITY = int(os.environ.get("STREAM_JPEG_QUALITY", "65"))
-STREAM_MAX_WIDTH = int(os.environ.get("STREAM_MAX_WIDTH", "640"))
+STREAM_MAX_WIDTH = int(os.environ.get("STREAM_MAX_WIDTH", "720"))
 
 # Risk weights - named, additive, capped at 100 (see risk.py). Override the
 # alert threshold per env for unfamiliar footage without editing source.
 RISK_WEIGHTS = {
     "RESTRICTED_ZONE_INTRUSION": 40,
+    "VIRTUAL_FENCE_INTRUSION": 90,
+    "VIRTUAL_FENCE_PROXIMITY": 45,
+    "RESTRICTED_CAMERA_BREACH": 95,
     "LOITERING_HIGH": 25,
     "LOITERING_MEDIUM": 10,
     "VEHICLE_IN_ZONE": 10,
@@ -99,8 +109,11 @@ RISK_WEIGHTS = {
     "REPEATED_ZONE_VISITS": 15,
     "CROWD_FORMATION": 10,
 }
-RISK_HIGH_BAND = int(os.environ.get("RISK_HIGH_BAND", 50))
+RISK_CRITICAL_BAND = int(os.environ.get("RISK_CRITICAL_BAND", 90))
+RISK_HIGH_BAND = int(os.environ.get("RISK_HIGH_BAND", 70))
 RISK_MEDIUM_BAND = int(os.environ.get("RISK_MEDIUM_BAND", 30))
+VIRTUAL_FENCE_BUFFER_NORM = float(os.environ.get("VIRTUAL_FENCE_BUFFER_NORM", "0.08"))
+
 
 # Incident deduplication: same camera+track+behavior within this window updates
 # the existing incident instead of creating a new one every frame.

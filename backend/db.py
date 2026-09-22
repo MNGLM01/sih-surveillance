@@ -45,23 +45,46 @@ CREATE TABLE IF NOT EXISTS anpr_detections (
 CREATE INDEX IF NOT EXISTS idx_anpr_plate ON anpr_detections(plate_number);
 CREATE INDEX IF NOT EXISTS idx_anpr_camera ON anpr_detections(camera_id);
 CREATE INDEX IF NOT EXISTS idx_anpr_timestamp ON anpr_detections(timestamp);
+CREATE INDEX IF NOT EXISTS idx_incidents_camera_created ON incidents(camera_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
+CREATE INDEX IF NOT EXISTS idx_incidents_track_camera ON incidents(camera_id, track_id);
+CREATE INDEX IF NOT EXISTS idx_events_camera_started ON events(camera_id, started_at);
 """
 
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000;")
     return conn
 
 
 def init_db(cameras):
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = get_conn()
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
     conn.executescript(SCHEMA)
+    # Ensure is_restricted column exists on cameras table
+    try:
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(cameras)").fetchall()]
+        if "is_restricted" not in cols:
+            conn.execute("ALTER TABLE cameras ADD COLUMN is_restricted INTEGER DEFAULT 0")
+    except Exception:
+        pass
+
     for cam in cameras:
+        existing = conn.execute("SELECT zones_json, is_restricted FROM cameras WHERE id = ?", (cam["id"],)).fetchone()
+        if existing and existing["zones_json"] is not None:
+            zones_json = existing["zones_json"]
+            is_restricted = existing["is_restricted"] if existing["is_restricted"] is not None else int(cam.get("is_restricted", 0))
+        else:
+            zones_json = json.dumps(cam.get("zones", []))
+            is_restricted = int(cam.get("is_restricted", 0))
+
         conn.execute(
-            "INSERT OR REPLACE INTO cameras (id, name, source, lat, lon, zones_json) VALUES (?, ?, ?, ?, ?, ?)",
-            (cam["id"], cam["name"], cam["source"], cam["lat"], cam["lon"], json.dumps(cam["zones"])),
+            "INSERT OR REPLACE INTO cameras (id, name, source, lat, lon, zones_json, is_restricted) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (cam["id"], cam["name"], cam["source"], cam["lat"], cam["lon"], zones_json, is_restricted),
         )
     conn.commit()
     conn.close()
@@ -72,8 +95,60 @@ def list_cameras():
     rows = [dict(r) for r in conn.execute("SELECT * FROM cameras")]
     conn.close()
     for r in rows:
-        r["zones"] = json.loads(r.pop("zones_json"))
+        r["zones"] = json.loads(r.pop("zones_json")) if r.get("zones_json") else []
+        r["is_restricted"] = bool(r.get("is_restricted", 0))
     return rows
+
+
+def get_camera_zones(camera_id: str) -> list[dict] | None:
+    conn = get_conn()
+    row = conn.execute("SELECT zones_json FROM cameras WHERE id = ?", (camera_id,)).fetchone()
+    conn.close()
+    if row and row["zones_json"] is not None:
+        try:
+            return json.loads(row["zones_json"])
+        except Exception:
+            pass
+    return None
+
+
+
+def update_camera_zones(camera_id: str, zones: list[dict]):
+    conn = get_conn()
+    conn.execute(
+        "UPDATE cameras SET zones_json = ? WHERE id = ?",
+        (json.dumps(zones), camera_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_camera_restricted(camera_id: str, is_restricted: bool):
+    conn = get_conn()
+    # Ensure column exists
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(cameras)").fetchall()]
+    if "is_restricted" not in cols:
+        conn.execute("ALTER TABLE cameras ADD COLUMN is_restricted INTEGER DEFAULT 0")
+    conn.execute(
+        "UPDATE cameras SET is_restricted = ? WHERE id = ?",
+        (1 if is_restricted else 0, camera_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_camera_restricted(camera_id: str) -> bool:
+    conn = get_conn()
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(cameras)").fetchall()]
+    if "is_restricted" not in cols:
+        conn.close()
+        return False
+    row = conn.execute("SELECT is_restricted FROM cameras WHERE id = ?", (camera_id,)).fetchone()
+    conn.close()
+    if row and "is_restricted" in row.keys() and row["is_restricted"] is not None:
+        return bool(row["is_restricted"])
+    return False
+
 
 
 # --- events (legacy, score-crossing observations - unchanged shape for the existing dashboard) ---

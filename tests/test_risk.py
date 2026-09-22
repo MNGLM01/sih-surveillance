@@ -17,12 +17,19 @@ class TestRiskEngine(unittest.TestCase):
         self.engine = RiskEngine()
 
     def test_weighted_reasons_worked_example(self):
-        """The PRD's headline example: zone intrusion + after-hours = 55, HIGH."""
+        """Zone intrusion + after-hours = 55 (MEDIUM under >= 70 HIGH threshold).
+        With high loitering (+25), total is 80 (HIGH)."""
         events = [_event("ZONE_INTRUSION", metadata={"zone_name": "Main Gate"}), _event("AFTER_HOURS")]
         result = self.engine.evaluate(events, "person")
         self.assertEqual(result.score, 55)
-        self.assertEqual(result.severity, "HIGH")
+        self.assertEqual(result.severity, "MEDIUM")
         self.assertEqual({r.type for r in result.reasons}, {"RESTRICTED_ZONE_INTRUSION", "AFTER_HOURS"})
+
+        # With compounding factor (e.g. loitering +25), score = 80 -> HIGH (>= 70)
+        events_high = events + [_event("LOITERING", metadata={"dwell_seconds": 200, "band": "HIGH"})]
+        result_high = self.engine.evaluate(events_high, "person")
+        self.assertEqual(result_high.score, 80)
+        self.assertEqual(result_high.severity, "HIGH")
 
     def test_score_capped_at_100(self):
         events = [

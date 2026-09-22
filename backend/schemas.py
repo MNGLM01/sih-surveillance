@@ -92,9 +92,34 @@ class Zone:
 
     def contains(self, point: tuple[float, float], frame_w: int, frame_h: int) -> bool:
         x1, y1, x2, y2 = self.to_pixels(frame_w, frame_h)
+        min_x, max_x = min(x1, x2), max(x1, x2)
+        min_y, max_y = min(y1, y2), max(y1, y2)
         x, y = point
-        return x1 <= x <= x2 and y1 <= y <= y2
+        return min_x <= x <= max_x and min_y <= y <= max_y
 
     def to_pixels(self, frame_w: int, frame_h: int) -> tuple[float, float, float, float]:
         nx1, ny1, nx2, ny2 = self.rect_norm
         return nx1 * frame_w, ny1 * frame_h, nx2 * frame_w, ny2 * frame_h
+
+    def distance_norm_to_point(self, point: tuple[float, float], frame_w: int, frame_h: int) -> float:
+        """Returns normalized Euclidean distance (0.0 if inside) from point to zone perimeter."""
+        if frame_w <= 0 or frame_h <= 0:
+            return 0.0
+        px_norm = point[0] / frame_w
+        py_norm = point[1] / frame_h
+        min_x, max_x = min(self.rect_norm[0], self.rect_norm[2]), max(self.rect_norm[0], self.rect_norm[2])
+        min_y, max_y = min(self.rect_norm[1], self.rect_norm[3]), max(self.rect_norm[1], self.rect_norm[3])
+        dx = max(min_x - px_norm, 0.0, px_norm - max_x)
+        dy = max(min_y - py_norm, 0.0, py_norm - max_y)
+        return (dx * dx + dy * dy) ** 0.5
+
+    def distance_to_point(self, point: tuple[float, float], frame_w: int, frame_h: int) -> float:
+        """Returns pixel distance (0.0 if inside) from point to zone perimeter."""
+        x1, y1, x2, y2 = self.to_pixels(frame_w, frame_h)
+        min_x, max_x = min(x1, x2), max(x1, x2)
+        min_y, max_y = min(y1, y2), max(y1, y2)
+        px, py = point
+        dx = max(min_x - px, 0.0, px - max_x)
+        dy = max(min_y - py, 0.0, py - max_y)
+        return (dx * dx + dy * dy) ** 0.5
+

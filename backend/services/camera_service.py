@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
+import db
 from behavior import BehaviorEngine
 from camera_worker import STATUS_STOPPED, CameraWorker
 from detector import Detector
@@ -37,11 +38,23 @@ class CameraContext:
     evidence: object = None  # set once fps is known, by CameraWorker
     status: str = STATUS_STOPPED
     error: str | None = None
+    is_restricted: bool = False
 
 
 def build_camera_context(cfg: dict) -> CameraContext:
     detector = Detector()
-    zones = [Zone(name=z["name"], rect_norm=z["rect_norm"]) for z in cfg.get("zones", [])]
+    try:
+        db_zones = db.get_camera_zones(cfg["id"])
+    except Exception:
+        db_zones = None
+    raw_zones = db_zones if db_zones is not None else cfg.get("zones", [])
+    zones = [Zone(name=z["name"], rect_norm=tuple(z["rect_norm"])) for z in raw_zones]
+
+
+    try:
+        is_restricted = db.get_camera_restricted(cfg["id"])
+    except Exception:
+        is_restricted = bool(cfg.get("is_restricted", False))
 
     anpr_engine = None
     if config.ANPR_ENABLED:
@@ -70,7 +83,9 @@ def build_camera_context(cfg: dict) -> CameraContext:
         behavior_engine=BehaviorEngine(),
         incident_manager=IncidentManager(),
         anpr_engine=anpr_engine,
+        is_restricted=is_restricted,
     )
+
 
 
 class CameraService:
@@ -125,6 +140,17 @@ class CameraService:
     def start_all(self):
         for camera_id in self.contexts:
             self.start_camera(camera_id)
+
+    def update_zones(self, camera_id: str, zones: list[Zone]):
+        context = self.contexts.get(camera_id)
+        if context:
+            context.zones = zones
+
+    def set_camera_restricted(self, camera_id: str, is_restricted: bool):
+        context = self.contexts.get(camera_id)
+        if context:
+            context.is_restricted = is_restricted
+
 
     def stop_all(self):
         for camera_id in list(self._workers):

@@ -1,93 +1,20 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>SIH Surveillance Dashboard</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<link rel="stylesheet" href="style.css">
-</head>
-<body>
-  <header>
-    <div class="header-left">
-      <div class="logo-icon">🛡️</div>
-      <div>
-        <h1>AI Multi-Camera Surveillance Center</h1>
-        <div class="subheading">Simultaneous 4-Camera Threat Detection & Tracking</div>
-      </div>
-    </div>
-    <div class="header-right">
-      <div class="stat-pill"><span class="pill-label">Cameras Online</span> <span id="stat-cameras" class="pill-val">4 / 4</span></div>
-      <div class="stat-pill"><span class="pill-label">Active Incidents</span> <span id="stat-incidents" class="pill-val">0</span></div>
-      <span id="status">Connecting...</span>
-    </div>
-  </header>
-  <main>
-    <section id="surveillance-center">
-      <div class="section-title-bar">
-        <h2>Simultaneous 4-Camera Live Surveillance Matrix</h2>
-        <div class="matrix-actions">
-          <span class="auto-scan-badge">● Auto-Discovered from sample_videos</span>
-        </div>
-      </div>
-      <div id="camera-grid" class="camera-grid">
-        <!-- 4 Camera cards rendered dynamically -->
-      </div>
-    </section>
-    <section id="side-panel">
-      <div id="map-section" class="panel-card">
-        <div class="card-header">
-          <h2>Facility Perimeter Map</h2>
-          <span id="map-legend">4 Camera Nodes</span>
-        </div>
-        <div id="map"></div>
-      </div>
-      <div id="alerts" class="panel-card">
-        <div class="card-header">
-          <h2>Live Threat Alerts</h2>
-          <span id="alert-counter" class="counter-badge">0 Alerts</span>
-        </div>
-        <ul id="alert-list">
-          <li class="empty-state">Monitoring active feeds for zone violations and loitering...</li>
-        </ul>
-      </div>
-      <div id="history" class="panel-card">
-        <div class="card-header">
-          <h2>Security Event &amp; Incident Log</h2>
-        </div>
-        <div class="table-container">
-          <table id="event-table">
-            <thead>
-              <tr><th>Time</th><th>Cam</th><th>Target</th><th>Risk</th><th>Evidence</th></tr>
-            </thead>
-            <tbody>
-              <tr><td colspan="5" style="text-align:center; color:#6b7280; padding:1rem;">Awaiting detections...</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <div id="anpr-panel" class="panel-card">
-        <div class="card-header">
-          <h2>ANPR — License Plate Detections</h2>
-          <span id="anpr-counter" class="counter-badge anpr-badge">0 Plates</span>
-        </div>
-        <div class="anpr-search-bar">
-          <input type="text" id="anpr-search-input" placeholder="Search plate number..." />
-          <button id="anpr-search-btn" onclick="searchPlate()">Search</button>
-        </div>
-        <div class="table-container">
-          <table id="anpr-table">
-            <thead>
-              <tr><th>Time</th><th>Cam</th><th>Track</th><th>Vehicle</th><th>Plate</th><th>Conf</th><th>Status</th></tr>
-            </thead>
-            <tbody>
-              <tr><td colspan="7" style="text-align:center; color:#6b7280; padding:1rem;">Awaiting plate detections...</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-  </main>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Border AI Command Center</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

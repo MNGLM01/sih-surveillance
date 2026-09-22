@@ -8,3 +8,9 @@ scratch/
 frontend/live/*.jpg
 *.pt
 *.code-workspace
+
+# Extra local test videos
+sample_videos/*.mp4
+!sample_videos/people-walking.mp4
+!sample_videos/Cam1.mp4
+!sample_videos/Cam2.mp4
