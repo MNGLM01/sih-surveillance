@@ -24,11 +24,16 @@ export function CameraTile({
   const { isCameraRestricted, incidents } = useSurveillance()
   const isRestricted = isCameraRestricted(camera.id)
 
+  const now = Date.now()
   const openIncidents = incidents.filter(
     (i) => i.cameraId === camera.id && OPEN_INCIDENT_STATUSES.has(i.status),
   )
-  const hasCritical = openIncidents.some((i) => i.severity === 'CRITICAL')
-  const hasHigh = openIncidents.some((i) => i.severity === 'HIGH')
+  const hasCritical = openIncidents.some(
+    (i) => i.severity === 'CRITICAL' && now - new Date(i.updatedAt).getTime() < 15000,
+  )
+  const hasHigh = openIncidents.some(
+    (i) => i.severity === 'HIGH' && now - new Date(i.updatedAt).getTime() < 15000,
+  )
   const isDanger = hasCritical || hasHigh
   const hasIncident = openIncidents.length > 0
 

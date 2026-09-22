@@ -86,6 +86,13 @@ def init_db(cameras):
             "INSERT OR REPLACE INTO cameras (id, name, source, lat, lon, zones_json, is_restricted) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (cam["id"], cam["name"], cam["source"], cam["lat"], cam["lon"], zones_json, is_restricted),
         )
+
+    # Prune stale or demo cameras not present in active cameras list
+    if cameras:
+        active_ids = [c["id"] for c in cameras]
+        placeholders = ",".join("?" * len(active_ids))
+        conn.execute(f"DELETE FROM cameras WHERE id NOT IN ({placeholders})", active_ids)
+
     conn.commit()
     conn.close()
 
@@ -248,7 +255,7 @@ def get_incident(incident_id):
     return result
 
 
-def list_incidents(camera_id=None, status=None):
+def list_incidents(camera_id=None, status=None, limit=100):
     query = "SELECT * FROM incidents"
     clauses, params = [], []
     if camera_id:
@@ -260,6 +267,8 @@ def list_incidents(camera_id=None, status=None):
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
     query += " ORDER BY created_at DESC"
+    if limit is not None:
+        query += f" LIMIT {int(limit)}"
     conn = get_conn()
     rows = [dict(r) for r in conn.execute(query, params)]
     conn.close()

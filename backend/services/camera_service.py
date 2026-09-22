@@ -42,7 +42,19 @@ class CameraContext:
 
 
 def build_camera_context(cfg: dict) -> CameraContext:
-    detector = Detector()
+    try:
+        detector = Detector()
+    except Exception as exc:
+        if ("out of memory" in str(exc).lower() or "cuda" in str(exc).lower()) and getattr(config, "YOLO_DEVICE", "cpu") != "cpu":
+            import logging
+            logging.getLogger("camera_service").warning(
+                "Failed to initialize detector for camera %s on %s: %s; falling back to CPU",
+                cfg.get("id"), getattr(config, "YOLO_DEVICE", "cuda"), exc,
+            )
+            config.YOLO_DEVICE = "cpu"
+            detector = Detector()
+        else:
+            raise
     try:
         db_zones = db.get_camera_zones(cfg["id"])
     except Exception:

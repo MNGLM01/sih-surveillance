@@ -122,23 +122,31 @@ class TestVirtualFenceAndRestricted(unittest.TestCase):
 
     def test_virtual_fence_persists_across_server_restarts(self):
         """Tests that user-configured virtual fences persist when server restarts (db.init_db)."""
-        cam_id = "test_persist_cam"
-        initial_cam = {"id": cam_id, "name": "Persist Cam", "source": "0", "lat": 0, "lon": 0, "zones": []}
-        db.init_db([initial_cam])
+        import tempfile
+        orig_db = db.DB_PATH
+        temp_dir = tempfile.TemporaryDirectory()
+        db.DB_PATH = Path(temp_dir.name) / "test_persist.db"
+        try:
+            cam_id = "test_persist_cam"
+            initial_cam = {"id": cam_id, "name": "Persist Cam", "source": "0", "lat": 0, "lon": 0, "zones": []}
+            db.init_db([initial_cam])
 
-        # User saves a custom virtual fence
-        custom_zones = [{"name": "Custom Fence A", "rect_norm": [0.2, 0.2, 0.7, 0.7]}]
-        db.update_camera_zones(cam_id, custom_zones)
+            # User saves a custom virtual fence
+            custom_zones = [{"name": "Custom Fence A", "rect_norm": [0.2, 0.2, 0.7, 0.7]}]
+            db.update_camera_zones(cam_id, custom_zones)
 
-        # Server shuts down and restarts: db.init_db is called again with config
-        db.init_db([initial_cam])
+            # Server shuts down and restarts: db.init_db is called again with config
+            db.init_db([initial_cam])
 
-        # Verify the custom virtual fence was NOT wiped out
-        loaded_zones = db.get_camera_zones(cam_id)
-        self.assertIsNotNone(loaded_zones)
-        self.assertEqual(len(loaded_zones), 1)
-        self.assertEqual(loaded_zones[0]["name"], "Custom Fence A")
-        self.assertEqual(loaded_zones[0]["rect_norm"], [0.2, 0.2, 0.7, 0.7])
+            # Verify the custom virtual fence was NOT wiped out
+            loaded_zones = db.get_camera_zones(cam_id)
+            self.assertIsNotNone(loaded_zones)
+            self.assertEqual(len(loaded_zones), 1)
+            self.assertEqual(loaded_zones[0]["name"], "Custom Fence A")
+            self.assertEqual(loaded_zones[0]["rect_norm"], [0.2, 0.2, 0.7, 0.7])
+        finally:
+            db.DB_PATH = orig_db
+            temp_dir.cleanup()
 
     def test_person_leaves_fence_emits_low_severity(self):
         """When a person leaves the virtual fence, manager emits LOW severity so alarm sound turns off."""

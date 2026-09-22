@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -30,6 +31,9 @@ from typing import Optional
 
 import cv2
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).parent))
+import config
 
 logger = logging.getLogger("anpr")
 
@@ -44,8 +48,41 @@ def _ensure_paddleocr():
     if _PADDLE_OCR is not None:
         return _PADDLE_AVAILABLE
     try:
+        # Pre-import torch to avoid Windows DLL conflicts (e.g. shm.dll)
+        try:
+            import torch  # noqa: F401
+        except Exception:
+            pass
+
         os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] = "0"
         os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+
+        # Check whether the installed Paddle backend was compiled with CUDA
+        paddle_cuda = False
+        try:
+            import paddle
+            paddle_cuda = bool(
+                paddle.is_compiled_with_cuda()
+                and hasattr(paddle, "device")
+                and hasattr(paddle.device, "cuda")
+                and paddle.device.cuda.device_count() > 0
+            )
+        except Exception:
+            paddle_cuda = False
+
+        gpu_requested = getattr(config, "CUDA_AVAILABLE", False) and ("cuda" in str(getattr(config, "YOLO_DEVICE", "")).lower())
+
+        if paddle_cuda and gpu_requested:
+            ocr_device = "gpu:0"
+            use_gpu_flag = True
+            log_device = "GPU"
+        else:
+            ocr_device = "cpu"
+            use_gpu_flag = False
+            log_device = "CPU"
+            if not paddle_cuda and gpu_requested:
+                logger.info("Paddle backend compiled without CUDA; PaddleOCR remaining on CPU")
+
         from paddleocr import PaddleOCR  # type: ignore
         try:
             # PaddleOCR 3.x
@@ -54,6 +91,7 @@ def _ensure_paddleocr():
                 use_doc_unwarping=False,
                 use_textline_orientation=False,
                 lang="en",
+                device=ocr_device,
             )
         except Exception:
             # Legacy PaddleOCR 2.x fallback
@@ -61,9 +99,10 @@ def _ensure_paddleocr():
                 use_angle_cls=True,
                 lang="en",
                 show_log=False,
-                use_gpu=False,
+                use_gpu=use_gpu_flag,
             )
         _PADDLE_AVAILABLE = True
+        logger.info("PaddleOCR device: %s", log_device)
         logger.info("PaddleOCR initialised successfully")
     except Exception as exc:
         _PADDLE_OCR = False  # sentinel: attempted but failed
@@ -259,7 +298,7 @@ class ANPREngine:
             return False
         try:
             self._plate_model = _YOLO_CLASS(self._plate_model_path)
-            logger.info("Plate detection model loaded: %s", self._plate_model_path)
+            logger.info("Plate detection model loaded: %s (device: %s)", self._plate_model_path, config.YOLO_DEVICE)
             return True
         except Exception as exc:
             logger.error("Failed to load plate model: %s", exc)
@@ -426,6 +465,7 @@ class ANPREngine:
             results = self._plate_model.predict(
                 vehicle_crop,
                 conf=self.plate_confidence,
+                device=config.YOLO_DEVICE,
                 verbose=False,
             )[0]
             boxes = results.boxes
@@ -437,6 +477,31 @@ class ANPREngine:
             conf = float(boxes.conf[best_idx])
             return tuple(bbox), conf
         except Exception as exc:
+            if "out of memory" in str(exc).lower() and config.YOLO_DEVICE != "cpu":
+                logger.warning("CUDA OOM in plate detector; falling back to CPU: %s", exc)
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                try:
+                    results = self._plate_model.predict(
+                        vehicle_crop,
+                        conf=self.plate_confidence,
+                        device="cpu",
+                        verbose=False,
+                    )[0]
+                    boxes = results.boxes
+                    if boxes is None or len(boxes) == 0:
+                        return None, 0.0
+                    best_idx = boxes.conf.argmax().item()
+                    bbox = boxes.xyxy[best_idx].tolist()
+                    conf = float(boxes.conf[best_idx])
+                    return tuple(bbox), conf
+                except Exception as fallback_exc:
+                    logger.debug("Plate detection fallback error: %s", fallback_exc)
+                    return None, 0.0
             logger.debug("Plate detection error: %s", exc)
             return None, 0.0
 

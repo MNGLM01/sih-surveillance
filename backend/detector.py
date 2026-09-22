@@ -6,9 +6,13 @@ from pathlib import Path
 
 from ultralytics import YOLO
 
+import logging
 sys.path.insert(0, str(Path(__file__).parent))
+import config
 from config import DETECTOR_MODEL_PATH, DETECTOR_CONFIDENCE
 from schemas import Detection
+
+logger = logging.getLogger("detector")
 
 # COCO class ids this prototype cares about.
 CLASS_NAMES = {0: "person", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
@@ -30,7 +34,32 @@ class Detector:
         self.confidence = confidence
 
     def detect(self, frame) -> list[Detection]:
-        results = self.model.predict(frame, classes=self.classes, conf=self.confidence, verbose=False)[0]
+        try:
+            results = self.model.predict(
+                frame,
+                classes=self.classes,
+                conf=self.confidence,
+                device=config.YOLO_DEVICE,
+                verbose=False,
+            )[0]
+        except Exception as exc:
+            if "out of memory" in str(exc).lower() and config.YOLO_DEVICE != "cpu":
+                logger.warning("CUDA OOM in detector; falling back to CPU: %s", exc)
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                results = self.model.predict(
+                    frame,
+                    classes=self.classes,
+                    conf=self.confidence,
+                    device="cpu",
+                    verbose=False,
+                )[0]
+            else:
+                raise
         return self.to_detections(results)
 
     def reset_tracker(self):

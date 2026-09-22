@@ -210,9 +210,22 @@ def on_anpr(camera_id, anpr_result):
         })
 
 
+def verify_gpu() -> dict:
+    """Lightweight runtime GPU verification."""
+    return config.verify_gpu_runtime()
+
+
+@app.get("/gpu")
+def get_gpu_diagnostics():
+    return config.verify_gpu_runtime()
+
+
 @app.on_event("startup")
 def startup():
     global MAIN_LOOP, CAMERA_SERVICE
+    print(config.get_gpu_diagnostics_banner(), flush=True)
+    import logging
+    logging.getLogger("uvicorn").info("\n" + config.get_gpu_diagnostics_banner())
     torch.set_num_threads(3)  # Bound PyTorch CPU threads to prevent thrashing across 4 camera workers
     MAIN_LOOP = asyncio.get_event_loop()
     active_cameras = discover_cameras(4)
@@ -334,8 +347,8 @@ def get_evidence(event_id: int):
 
 
 @app.get("/incidents")
-def get_incidents(camera_id: str | None = None, status: str | None = None):
-    return db.list_incidents(camera_id=camera_id, status=status)
+def get_incidents(camera_id: str | None = None, status: str | None = None, limit: int = 100):
+    return db.list_incidents(camera_id=camera_id, status=status, limit=limit)
 
 
 @app.patch("/incidents/{incident_id}")

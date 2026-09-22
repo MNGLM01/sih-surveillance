@@ -1,8 +1,67 @@
+import logging
 import os
 from pathlib import Path
 
+logger = logging.getLogger("config")
+
+# --- GPU / Hardware Acceleration Configuration ---
+try:
+    import torch
+    CUDA_AVAILABLE = torch.cuda.is_available()
+except Exception:
+    CUDA_AVAILABLE = False
+
+if CUDA_AVAILABLE:
+    YOLO_DEVICE = os.environ.get("YOLO_DEVICE", "cuda:0")
+else:
+    YOLO_DEVICE = "cpu"
+
+logger.info("CUDA available: %s | Selected YOLO device: %s", CUDA_AVAILABLE, YOLO_DEVICE)
+
+
+def get_gpu_diagnostics_banner() -> str:
+    """Generate human-readable startup GPU diagnostic banner."""
+    sep = "=" * 50
+    lines = [sep, "GPU CONFIGURATION"]
+    try:
+        import torch
+        if torch.cuda.is_available():
+            lines.append(f"PyTorch version: {torch.__version__}")
+            lines.append("CUDA available: True")
+            lines.append(f"CUDA runtime: {getattr(torch.version, 'cuda', 'N/A')}")
+            lines.append(f"GPU: {torch.cuda.get_device_name(0)}")
+            lines.append(f"YOLO device: {YOLO_DEVICE}")
+        else:
+            lines.append("CUDA available: False")
+            lines.append(f"YOLO device: {YOLO_DEVICE}")
+    except Exception as exc:
+        lines.append(f"CUDA available: False ({exc})")
+        lines.append(f"YOLO device: {YOLO_DEVICE}")
+    lines.append(sep)
+    return "\n".join(lines)
+
+
+def verify_gpu_runtime() -> dict:
+    """Lightweight runtime verification of GPU availability and metadata."""
+    try:
+        import torch
+        avail = torch.cuda.is_available()
+        return {
+            "cuda_available": avail,
+            "pytorch_version": torch.__version__,
+            "cuda_runtime": getattr(torch.version, "cuda", None) if avail else None,
+            "gpu_name": torch.cuda.get_device_name(0) if avail else None,
+            "yolo_device": YOLO_DEVICE,
+        }
+    except Exception as exc:
+        return {
+            "cuda_available": False,
+            "error": str(exc),
+            "yolo_device": YOLO_DEVICE,
+        }
+
 SAMPLE_VIDEOS_DIR = Path(__file__).resolve().parent.parent / "sample_videos"
-SAMPLE_VIDEO = os.path.join(str(SAMPLE_VIDEOS_DIR), "people-walking.mp4")
+SAMPLE_VIDEO = os.path.join(str(SAMPLE_VIDEOS_DIR), "Cam1.mp4")
 
 # Zone rectangles are normalized (0..1) fractions of frame width/height, so they
 # work across any source resolution.

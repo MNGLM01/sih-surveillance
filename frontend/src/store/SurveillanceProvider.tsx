@@ -261,7 +261,7 @@ function loadRestrictedCameras(): string[] {
   } catch {
     // fallback
   }
-  return ['cam1']
+  return []
 }
 
 const initialState: State = {

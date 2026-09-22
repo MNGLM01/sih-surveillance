@@ -32,12 +32,24 @@ export function SelectedCameraPanel({
   const latestIncident = cameraIncidents[0] ?? propLatestIncident
 
 
-  const hasDangerIncident = cameraIncidents.some(
-    (i) => (i.status === 'NEW' || i.status === 'INVESTIGATING') && (i.severity === 'HIGH' || i.severity === 'CRITICAL'),
+  const now = Date.now()
+  const hasActiveDangerTrack = cameraTracks.some((t) => (t.riskScore ?? 0) >= 70)
+  const hasActiveDangerIncident = cameraIncidents.some(
+    (i) =>
+      (i.status === 'NEW' || i.status === 'INVESTIGATING') &&
+      (i.severity === 'HIGH' || i.severity === 'CRITICAL') &&
+      now - new Date(i.updatedAt).getTime() < 15000,
   )
-  const hasMediumIncident =
-    !hasDangerIncident &&
-    cameraIncidents.some((i) => (i.status === 'NEW' || i.status === 'INVESTIGATING') && i.severity === 'MEDIUM')
+  const hasDangerIncident = hasActiveDangerTrack || hasActiveDangerIncident
+
+  const hasActiveMediumTrack = cameraTracks.some((t) => (t.riskScore ?? 0) >= 30 && (t.riskScore ?? 0) < 70)
+  const hasActiveMediumIncident = cameraIncidents.some(
+    (i) =>
+      (i.status === 'NEW' || i.status === 'INVESTIGATING') &&
+      i.severity === 'MEDIUM' &&
+      now - new Date(i.updatedAt).getTime() < 15000,
+  )
+  const hasMediumIncident = !hasDangerIncident && (hasActiveMediumTrack || hasActiveMediumIncident)
 
   const personCount = cameraTracks.filter((t) => t.className === 'person').length
   const vehicleCount = cameraTracks.filter((t) => t.className !== 'person').length

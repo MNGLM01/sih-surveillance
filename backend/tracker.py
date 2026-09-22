@@ -8,10 +8,13 @@ ultralytics ids reset/collide across camera model instances, so every id is
 rewritten as "<camera_id>:P-<raw_id>" before leaving this module).
 """
 from collections import deque
+import logging
 
 import config
 from detector import Detector
 from schemas import Detection, Track
+
+logger = logging.getLogger("tracker")
 
 POSITION_HISTORY_LEN = 30
 DEFAULT_TRACKER_CFG = "bytetrack.yaml"
@@ -41,15 +44,38 @@ class Tracker:
     def update(self, frame, now: float) -> tuple[list[Detection], list[Track]]:
         """`now` should be video-time (frame_idx / fps) for file sources so
         dwell-time reflects the footage's own timeline, not wall-clock CPU speed."""
-        results = self.detector.model.track(
-            frame,
-            persist=True,
-            classes=self.detector.classes,
-            conf=self.detector.confidence,
-            tracker=self.tracker_cfg,
-            imgsz=getattr(config, "YOLO_IMGSZ", 480),
-            verbose=False,
-        )[0]
+        try:
+            results = self.detector.model.track(
+                frame,
+                persist=True,
+                classes=self.detector.classes,
+                conf=self.detector.confidence,
+                tracker=self.tracker_cfg,
+                imgsz=getattr(config, "YOLO_IMGSZ", 480),
+                device=config.YOLO_DEVICE,
+                verbose=False,
+            )[0]
+        except Exception as exc:
+            if "out of memory" in str(exc).lower() and config.YOLO_DEVICE != "cpu":
+                logger.warning("[%s] CUDA OOM in tracker; falling back to CPU: %s", self.camera_id, exc)
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                results = self.detector.model.track(
+                    frame,
+                    persist=True,
+                    classes=self.detector.classes,
+                    conf=self.detector.confidence,
+                    tracker=self.tracker_cfg,
+                    imgsz=getattr(config, "YOLO_IMGSZ", 480),
+                    device="cpu",
+                    verbose=False,
+                )[0]
+            else:
+                raise
         detections = self.detector.to_detections(results)
 
         boxes = results.boxes

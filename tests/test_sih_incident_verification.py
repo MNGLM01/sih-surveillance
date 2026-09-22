@@ -186,46 +186,54 @@ class TestSIHIncidentVerification(unittest.TestCase):
         self.assertEqual(inc1.camera_id, "cam1")
         self.assertEqual(inc2.camera_id, "cam2")
 
-    def test_7_incident_updated_without_creating_database_row(self):
+    def test_7_incident_can_be_updated_without_duplicate_db_row(self):
         """TEST 7: An incident can be updated without creating another database row."""
-        # Insert a real test incident in SQLite
-        test_incident = Incident(
-            incident_id=None,
-            camera_id="cam1",
-            track_id="cam1:P-999",
-            object_class="car",
-            risk_score=60,
-            severity="HIGH",
-            status=IncidentStatus.NEW,
-            created_at="2026-01-01T00:00:00Z",
-            updated_at="2026-01-01T00:00:00Z",
-            reasons=["Zone intrusion: +40"],
-            evidence_path=None,
-        )
-        row_id = db.insert_incident(test_incident)
-        self.assertIsNotNone(row_id)
-        test_incident.incident_id = row_id
+        import tempfile
+        orig_db = db.DB_PATH
+        temp_dir = tempfile.TemporaryDirectory()
+        db.DB_PATH = Path(temp_dir.name) / "test_sih.db"
+        try:
+            db.init_db([{"id": "cam1", "name": "Cam 1", "source": "0", "lat": 0, "lon": 0, "zones": []}])
+            test_incident = Incident(
+                incident_id=None,
+                camera_id="cam1",
+                track_id="cam1:P-999",
+                object_class="car",
+                risk_score=60,
+                severity="HIGH",
+                status=IncidentStatus.NEW,
+                created_at="2026-01-01T00:00:00Z",
+                updated_at="2026-01-01T00:00:00Z",
+                reasons=["Zone intrusion: +40"],
+                evidence_path=None,
+            )
+            row_id = db.insert_incident(test_incident)
+            self.assertIsNotNone(row_id)
+            test_incident.incident_id = row_id
 
-        # Count total incidents
-        conn = db.get_conn()
-        count_before = conn.execute("SELECT count(*) FROM incidents").fetchone()[0]
-        conn.close()
+            # Count total incidents
+            conn = db.get_conn()
+            count_before = conn.execute("SELECT count(*) FROM incidents").fetchone()[0]
+            conn.close()
 
-        # Perform update
-        test_incident.risk_score = 85
-        test_incident.updated_at = "2026-01-01T00:00:15Z"
-        test_incident.reasons = ["Zone intrusion: +40", "Loitering 2min: +25"]
-        db.update_incident(test_incident)
+            # Perform update
+            test_incident.risk_score = 85
+            test_incident.updated_at = "2026-01-01T00:00:15Z"
+            test_incident.reasons = ["Zone intrusion: +40", "Loitering 2min: +25"]
+            db.update_incident(test_incident)
 
-        # Verify row count is unchanged and values updated
-        conn = db.get_conn()
-        count_after = conn.execute("SELECT count(*) FROM incidents").fetchone()[0]
-        row = db.get_incident(row_id)
-        conn.close()
+            # Verify row count is unchanged and values updated
+            conn = db.get_conn()
+            count_after = conn.execute("SELECT count(*) FROM incidents").fetchone()[0]
+            row = db.get_incident(row_id)
+            conn.close()
 
-        self.assertEqual(count_before, count_after, "Database row count must not change on update")
-        self.assertEqual(row["risk_score"], 85)
-        self.assertEqual(row["reasons"], ["Zone intrusion: +40", "Loitering 2min: +25"])
+            self.assertEqual(count_before, count_after, "Database row count must not change on update")
+            self.assertEqual(row["risk_score"], 85)
+            self.assertEqual(row["reasons"], ["Zone intrusion: +40", "Loitering 2min: +25"])
+        finally:
+            db.DB_PATH = orig_db
+            temp_dir.cleanup()
 
     def test_8_new_incident_created_after_cooldown_elapses(self):
         """TEST 8: A genuinely new incident can be created after the cooldown/lifecycle rules allow it."""

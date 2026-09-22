@@ -26,8 +26,9 @@ Two cameras (`cam1`, `cam2`) are configured by default, both reading the bundled
 
 ## Calibration knobs (env vars)
 
+- `YOLO_DEVICE=cuda:0` — hardware device for YOLO detector, ByteTrack tracker, and ANPR plate detector (`cuda:0` default when CUDA is available; set `YOLO_DEVICE=cpu` for CPU fallback).
 - `FORCE_AFTER_HOURS=true` — force the after-hours risk signal on, for demos run during the day.
-- `RISK_HIGH_BAND=<int>` — override the score threshold (default 50) that triggers an alert + evidence clip. Lower it to see alerts more easily on unfamiliar footage; raise it if everything is alerting.
+- `RISK_HIGH_BAND=<int>` — override the score threshold (default 70) that triggers an alert + evidence clip. Lower it to see alerts more easily on unfamiliar footage; raise it if everything is alerting.
 - `RISK_MEDIUM_BAND=<int>` — override the MEDIUM/LOW boundary (default 30).
 
 Restricted zones are defined per-camera in `backend/config.py` as **normalized** rectangles `(x1, y1, x2, y2)` — fractions of frame width/height, 0..1 — so they aren't tied to one source resolution. Add a new camera by appending to `CAMERAS`; a file path, `0` for a webcam, or an `rtsp://` URL all work as `source` (same `cv2.VideoCapture` call). Behavior thresholds (loitering, erratic speed, vehicle-stopped, crowd formation, incident cooldown) and risk weights are all in `backend/config.py`, not scattered through the code.
